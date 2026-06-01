@@ -6,7 +6,7 @@ from lsco_audit.paths import INTERIM_DIR, PROCESSED_DIR
 INPUT_CSV = INTERIM_DIR / "catalog_pages.csv"
 OUTPUT_TXT = PROCESSED_DIR / "credential_page_samples.txt"
 
-SAMPLE_PAGES = [130, 131, 133]
+SAMPLE_PAGES = [137, 244]
 
 
 def inspect_pages() -> None:
