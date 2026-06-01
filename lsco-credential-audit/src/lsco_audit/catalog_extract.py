@@ -1,36 +1,39 @@
-from __future__ import annotations
-
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 import pdfplumber
 
 
-def extract_catalog_pages(pdf_path: Path, catalog_year: str = "2025-2026") -> pd.DataFrame:
-    """Extract one row per PDF page while preserving page numbers."""
-    rows: list[dict[str, object]] = []
-    extracted_at = datetime.now(timezone.utc).isoformat()
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-    with pdfplumber.open(pdf_path) as pdf:
-        for idx, page in enumerate(pdf.pages, start=1):
-            text = page.extract_text() or ""
+CATALOG_PDF = PROJECT_ROOT / "data" / "raw" / "2025-2026 Catalog.pdf"
+OUTPUT_CSV = PROJECT_ROOT / "data" / "interim" / "catalog_pages.csv"
+
+
+def extract_catalog_pages() -> None:
+    rows = []
+
+    with pdfplumber.open(CATALOG_PDF) as pdf:
+        for page_number, page in enumerate(pdf.pages, start=1):
             rows.append(
                 {
-                    "catalog_year": catalog_year,
-                    "source_file": pdf_path.name,
-                    "page_number": idx,
-                    "text": text.strip(),
-                    "extraction_method": "pdfplumber.extract_text",
-                    "extracted_at": extracted_at,
+                    "catalog_year": "2025-2026",
+                    "source_file": CATALOG_PDF.name,
+                    "page_number": page_number,
+                    "text": page.extract_text() or "",
+                    "extraction_method": "pdfplumber",
+                    "extracted_at": datetime.now().isoformat(timespec="seconds"),
                 }
             )
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    OUTPUT_CSV.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(OUTPUT_CSV, index=False)
+
+    print(f"Extracted {len(df)} pages")
+    print(f"Wrote {OUTPUT_CSV}")
 
 
-def write_catalog_pages(pdf_path: Path, output_csv: Path, catalog_year: str = "2025-2026") -> Path:
-    output_csv.parent.mkdir(parents=True, exist_ok=True)
-    df = extract_catalog_pages(pdf_path=pdf_path, catalog_year=catalog_year)
-    df.to_csv(output_csv, index=False)
-    return output_csv
+if __name__ == "__main__":
+    extract_catalog_pages()
