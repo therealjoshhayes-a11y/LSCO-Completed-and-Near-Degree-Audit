@@ -7,6 +7,7 @@ COMPLETION_GRADES = {"A", "B", "C", "D", "S"}
 
 STUDENT_COURSES = DATA_DIR / "test" / "student_course_history_sample.csv"
 REQUIREMENTS = PROCESSED_DIR / "requirements_master.csv"
+CORE_LOOKUP = PROCESSED_DIR / "core_bucket_lookup.csv"
 
 DETAIL_OUTPUT = PROCESSED_DIR / "master_sample_audit_results.csv"
 SUMMARY_OUTPUT = PROCESSED_DIR / "master_sample_credential_summary.csv"
@@ -16,29 +17,89 @@ def normalize_course_set(courses: pd.DataFrame) -> set[str]:
     return set(courses["course_code"].dropna().astype(str))
 
 
-def audit_requirement(group: pd.DataFrame, completed_courses: set[str]) -> tuple[str, list[str]]:
-    option_type_values = set(group["option_type"])
+def normalize_bucket_name(value: str) -> str | None:
+    text = str(value).upper()
 
+    if "COMMUNICATION" in text:
+        return "COMMUNICATION_CORE"
+
+    if "MATH" in text:
+        return "MATHEMATICS_CORE"
+
+    if "LIFE AND PHYSICAL SCIENCE" in text:
+        return "LIFE_AND_PHYSICAL_SCIENCES_CORE"
+
+    if "LANGUAGE" in text and "PHILOSOPHY" in text:
+        return "LANGUAGE_PHILOSOPHY_AND_CULTURE_CORE"
+
+    if "CREATIVE ARTS" in text or "ARTS CORE" in text:
+        return "CREATIVE_ARTS_CORE"
+
+    if "AMERICAN HISTORY" in text:
+        return "AMERICAN_HISTORY_CORE"
+
+    if "GOVERNMENT" in text or "POLITICAL SCIENCE" in text:
+        return "GOVERNMENT_POLITICAL_SCIENCE_CORE"
+
+    if "SOCIAL" in text and "BEHAVIORAL" in text:
+        return "SOCIAL_AND_BEHAVIORAL_SCIENCE_CORE"
+
+    if "COMPONENT AREA OPTION" in text or "OPTION CORE" in text:
+        return "COMPONENT_AREA_OPTION_CORE"
+
+    return None
+
+
+def load_core_lookup() -> dict[str, set[str]]:
+    lookup = pd.read_csv(CORE_LOOKUP)
+
+    return {
+        bucket: set(group["course_code"].dropna().astype(str))
+        for bucket, group in lookup.groupby("bucket_name")
+    }
+
+
+def audit_requirement(
+    group: pd.DataFrame,
+    completed_courses: set[str],
+    core_lookup: dict[str, set[str]],
+) -> tuple[str, list[str]]:
     matched = []
+    unresolved_bucket_values = []
 
-    course_options = group[group["option_type"] == "COURSE"]["option_value"].astype(str)
+    for _, option in group.iterrows():
+        option_type = option["option_type"]
+        option_value = str(option["option_value"])
 
-    for course in course_options:
-        if course in completed_courses:
-            matched.append(course)
+        if option_type == "COURSE":
+            if option_value in completed_courses:
+                matched.append(option_value)
 
-    # CORE_BUCKET and ELECTIVE are carried but not resolved yet.
+        elif option_type == "CORE_BUCKET":
+            normalized_bucket = normalize_bucket_name(option_value)
+
+            if normalized_bucket is None:
+                unresolved_bucket_values.append(option_value)
+                continue
+
+            bucket_courses = core_lookup.get(normalized_bucket, set())
+            bucket_matches = sorted(completed_courses.intersection(bucket_courses))
+            matched.extend(bucket_matches)
+
+        elif option_type == "ELECTIVE":
+            continue
+
     required = int(group.iloc[0]["min_required"])
 
-    status = "MET" if len(matched) >= required else "UNMET"
+    if set(group["option_type"]) <= {"ELECTIVE"}:
+        return "UNRESOLVED_ELECTIVE", matched
 
-    if option_type_values <= {"CORE_BUCKET"}:
-        status = "UNRESOLVED_CORE_BUCKET"
+    if unresolved_bucket_values and not matched:
+        return "UNRESOLVED_CORE_BUCKET", matched
 
-    if option_type_values <= {"ELECTIVE"}:
-        status = "UNRESOLVED_ELECTIVE"
+    status = "MET" if len(set(matched)) >= required else "UNMET"
 
-    return status, matched
+    return status, sorted(set(matched))
 
 
 def get_audit_status(requirements_missing: int, unresolved: int) -> str:
@@ -54,6 +115,7 @@ def get_audit_status(requirements_missing: int, unresolved: int) -> str:
 def audit() -> None:
     courses = pd.read_csv(STUDENT_COURSES)
     requirements = pd.read_csv(REQUIREMENTS)
+    core_lookup = load_core_lookup()
 
     completed = courses[courses["grade"].isin(COMPLETION_GRADES)].copy()
 
@@ -67,7 +129,11 @@ def audit() -> None:
         for (credential_id, requirement_id), group in requirements.groupby(
             ["credential_id", "requirement_id"]
         ):
-            status, matched = audit_requirement(group, student_completed)
+            status, matched = audit_requirement(
+                group=group,
+                completed_courses=student_completed,
+                core_lookup=core_lookup,
+            )
 
             detail_rows.append(
                 {
