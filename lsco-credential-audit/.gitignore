@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Outputs and local data
+outputs/
+data/interim/*.csv
+data/processed/*.csv
+data/processed/*.xlsx
+
+# FERPA / student-level extracts - never commit
+student_data/
+*student*.csv
+*student*.xlsx
+*course_history*.csv
+*course_history*.xlsx
+*argos*.csv
+*banner*.csv
+
+# OS / editor
+.DS_Store
+.vscode/
+.ipynb_checkpoints/
