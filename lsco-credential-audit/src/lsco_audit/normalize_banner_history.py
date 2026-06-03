@@ -62,7 +62,7 @@ NORMALIZED_COLUMNS = [
     "credits",
 ]
 
-COURSE_PATTERN = re.compile(r"^([A-Z]{2,5})\s*([0-9]{4}[A-Z]?)$")
+COURSE_PATTERN = re.compile(r"^([A-Z]{2,5})\s*([0-9]{3,4}[A-Z]?)$")
 YEAR_PATTERN = re.compile(r"(19|20)\d{2}")
 
 
@@ -156,7 +156,7 @@ def normalize_banner_history(raw: pd.DataFrame) -> pd.DataFrame:
 
 def normalize_banner_history_csv(input_csv: str | Path, output_csv: str | Path) -> pd.DataFrame:
     """Read raw Banner CSV, normalize it, write normalized CSV, and return it."""
-    raw = pd.read_csv(input_csv)
+    raw = pd.read_csv(input_csv, encoding="cp1252")
     normalized = normalize_banner_history(raw)
     Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
     normalized.to_csv(output_csv, index=False)
