@@ -5,7 +5,7 @@ from lsco_audit.paths import DATA_DIR, PROCESSED_DIR
 
 COMPLETION_GRADES = {"A", "B", "C", "D", "S"}
 
-STUDENT_COURSES = DATA_DIR / "test" / "student_course_history_sample.csv"
+STUDENT_COURSES = DATA_DIR / "test" / "student_course_history_normalized.csv"
 REQUIREMENTS = PROCESSED_DIR / "requirements_master.csv"
 CORE_LOOKUP = PROCESSED_DIR / "core_bucket_lookup.csv"
 
