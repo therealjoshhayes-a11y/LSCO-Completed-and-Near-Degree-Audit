@@ -1,5 +1,6 @@
 ﻿catalog_year,volume,effective_term,graduate_by,source_pdf,source_docx,active,notes
-2022-2023,56,2022FA,2027-08-31,Catalog 2022-2023.pdf,2022-2023 Catalog.docx,true,Initial active catalog import target
-2023-2024,57,2023FA,2028-08-31,2023-2024 Catalog Final.pdf,2023-2024 Catalog Final.docx,true,Initial active catalog import target
-2024-2025,58,2024FA,2029-08-31,2024-2025 Catalog.pdf,FINAL 2024-2025 Catalog.docx,true,Initial active catalog import target
-2025-2026,59,2025FA,2030-08-31,2025-2026 Catalog.pdf,WORKING 2025-2026 Catalog.docx,true,Current working catalog baseline
+2021-2022,55,2021FA,2026-08-31,,2021-2022_Catalog.docx,true,DOCX-first active catalog import target
+2022-2023,56,2022FA,2027-08-31,,2022-2023_Catalog.docx,true,DOCX-first active catalog import target
+2023-2024,57,2023FA,2028-08-31,,2023-2024_Catalog.docx,true,DOCX-first active catalog import target
+2024-2025,58,2024FA,2029-08-31,,2024-2025_Catalog.docx,true,DOCX-first active catalog import target
+2025-2026,59,2025FA,2030-08-31,,2025-2026_Catalog.docx,true,DOCX-first active catalog import target
