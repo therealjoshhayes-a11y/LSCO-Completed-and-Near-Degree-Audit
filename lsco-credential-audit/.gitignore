@@ -28,3 +28,6 @@ student_data/
 # Local catalog source documents
 data/raw/catalogs/**/*.docx
 ../data/raw/catalogs/*.docx
+
+# Generated catalog inspection outputs
+data/interim/catalogs/
