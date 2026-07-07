@@ -149,6 +149,7 @@ def parse_requirement_row(
         "semester_label": semester_label,
         "raw_requirement_text": requirement_text,
         "credit_hours": credit_hours,
+        "raw_credit_hours_text": hours_text,
         "rule_type": rule_type,
         "course_codes": ";".join(course_codes),
         "issue_flags": ";".join(issues),
@@ -216,12 +217,33 @@ def split_compressed_course_row(row: dict[str, str]) -> list[dict[str, str]]:
     if len(parts) != len(course_codes):
         return [row]
 
+    raw_hours_text = row.get("raw_credit_hours_text", row.get("credit_hours", ""))
+    hour_values = parse_hours(raw_hours_text)
+
+    if len(hour_values) < len(course_codes):
+        return [row]
+
     split_rows = []
 
     for index, part in enumerate(parts, start=1):
+        clean_part = re.sub(
+            r"\s+Semester Hours\s+Total Program Hours\s*$",
+            "",
+            part,
+            flags=re.I,
+        )
+        clean_part = re.sub(
+            r"\s+Semester Hours\s*$",
+            "",
+            clean_part,
+            flags=re.I,
+        )
+        clean_part = clean_text(clean_part)
+
         new_row = dict(row)
         new_row["requirement_sequence"] = f'{row["requirement_sequence"]}.{index}'
-        new_row["raw_requirement_text"] = part
+        new_row["raw_requirement_text"] = clean_part
+        new_row["credit_hours"] = str(hour_values[index - 1])
         new_row["rule_type"] = "EXACT"
         new_row["course_codes"] = course_codes[index - 1]
         new_row["issue_flags"] = ""
@@ -355,6 +377,7 @@ def extract_catalog(record) -> None:
             "semester_label",
             "raw_requirement_text",
             "credit_hours",
+            "raw_credit_hours_text",
             "rule_type",
             "course_codes",
             "issue_flags",
@@ -406,6 +429,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
 
 
 
