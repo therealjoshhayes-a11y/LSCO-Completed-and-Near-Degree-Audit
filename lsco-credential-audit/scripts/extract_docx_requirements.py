@@ -174,8 +174,8 @@ def parse_total_row(
 
     if "Semester Hours" in label and "Total Program Hours" in label:
         if len(hours) >= 2:
-            semester_hours = str(hours[0])
-            total_program_hours = str(hours[1])
+            semester_hours = str(hours[-2])
+            total_program_hours = str(hours[-1])
     elif "Semester Hours" in label:
         if hours:
             semester_hours = str(hours[-1])
@@ -199,12 +199,66 @@ def parse_total_row(
     }
 
 
+def split_leading_or_compressed_row(row: dict[str, str]) -> list[dict[str, str]]:
+    text = row["raw_requirement_text"]
+    upper = text.upper()
+
+    if " OR " not in upper:
+        return [row]
+
+    course_codes = COURSE_RE.findall(text)
+    raw_hours_text = row.get("raw_credit_hours_text", row.get("credit_hours", ""))
+    hour_values = parse_hours(raw_hours_text)
+
+    if len(course_codes) < 3:
+        return [row]
+
+    if len(hour_values) != len(course_codes) - 1:
+        return [row]
+
+    parts = re.split(r"(?=\b[A-Z]{3,4}\s+\d{4}\b)", text)
+    parts = [clean_text(part) for part in parts if clean_text(part)]
+
+    if len(parts) != len(course_codes):
+        return [row]
+
+    # Only handle the safe shape:
+    # course 1 OR course 2, then remaining courses are required.
+    if not re.search(r"\bOR\s*$", parts[0], re.I):
+        return [row]
+
+    if any(" OR " in part.upper() for part in parts[1:]):
+        return [row]
+
+    split_rows = []
+
+    first = dict(row)
+    first["requirement_sequence"] = f'{row["requirement_sequence"]}.1'
+    first["raw_requirement_text"] = f"{parts[0]} {parts[1]}"
+    first["credit_hours"] = str(hour_values[0])
+    first["rule_type"] = "ANY_N"
+    first["course_codes"] = ";".join(course_codes[:2])
+    first["issue_flags"] = ""
+    split_rows.append(first)
+
+    for index, part in enumerate(parts[2:], start=2):
+        new_row = dict(row)
+        new_row["requirement_sequence"] = f'{row["requirement_sequence"]}.{index}'
+        new_row["raw_requirement_text"] = clean_text(part)
+        new_row["credit_hours"] = str(hour_values[index - 1])
+        new_row["rule_type"] = "EXACT"
+        new_row["course_codes"] = course_codes[index]
+        new_row["issue_flags"] = ""
+        split_rows.append(new_row)
+
+    return split_rows
+
 def split_compressed_course_row(row: dict[str, str]) -> list[dict[str, str]]:
     text = row["raw_requirement_text"]
     upper = text.upper()
 
     if " OR " in upper:
-        return [row]
+        return split_leading_or_compressed_row(row)
 
     course_codes = COURSE_RE.findall(text)
 
@@ -280,6 +334,34 @@ def parse_plan_table(
             continue
 
         if "Semester Hours" in first_cell or "Total Program Hours" in first_cell:
+            if COURSE_RE.search(first_cell):
+                requirement_text = re.sub(
+                    r"\s+Semester Hours\s+Total Program Hours\s*$",
+                    "",
+                    first_cell,
+                    flags=re.I,
+                )
+                requirement_text = re.sub(
+                    r"\s+Semester Hours\s*$",
+                    "",
+                    requirement_text,
+                    flags=re.I,
+                )
+                requirement_text = clean_text(requirement_text)
+
+                requirement_sequence += 1
+                parsed_row = parse_requirement_row(
+                    catalog_year=catalog_year,
+                    credential_title=credential_title,
+                    table_index=table_index,
+                    row_index=row_index,
+                    semester_label=semester_label,
+                    requirement_sequence=requirement_sequence,
+                    cells=[requirement_text, cells[1] if len(cells) > 1 else ""],
+                )
+
+                requirement_rows.extend(split_compressed_course_row(parsed_row))
+
             total_rows.append(
                 parse_total_row(
                     catalog_year=catalog_year,
@@ -429,6 +511,11 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
 
 
 
