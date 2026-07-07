@@ -24,3 +24,7 @@ student_data/
 .DS_Store
 .vscode/
 .ipynb_checkpoints/
+
+# Local catalog source documents
+data/raw/catalogs/**/*.docx
+../data/raw/catalogs/*.docx
