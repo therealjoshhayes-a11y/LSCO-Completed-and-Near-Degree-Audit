@@ -31,3 +31,6 @@ data/raw/catalogs/**/*.docx
 
 # Generated catalog inspection outputs
 data/interim/catalogs/
+
+# Generated catalog parser outputs
+data/processed/catalogs/
