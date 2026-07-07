@@ -109,7 +109,7 @@ ipython_config.py
 # poetry.toml
 
 # pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
+#   Similar to Pipfile.lock, it is recommended to include pdm.lock.
 #   pdm recommends including project-wide configuration in pdm.toml, but excluding .pdm-python.
 #   https://pdm-project.org/en/latest/usage/project/#working-with-version-control
 # pdm.lock
@@ -118,7 +118,7 @@ ipython_config.py
 .pdm-build/
 
 # pixi
-#   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
+#   Similar to Pipfile.lock, it is generally recommended to include pixi.lock.
 # pixi.lock
 #   Pixi creates a virtual environment in the .pixi directory, just like venv module creates one
 #   in the .venv directory. It is recommended not to include this directory in version control.
@@ -197,7 +197,7 @@ cython_debug/
 # Visual Studio Code
 #   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
 #   that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#   and can be added to the global gitignore or merged into this file. However, if you prefer, 
+#   and can be added to the global gitignore. However, if you prefer,
 #   you could uncomment the following to ignore the entire vscode folder
 # .vscode/
 # Temporary file for partial code execution
@@ -216,3 +216,27 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# LSCO / FERPA local data guardrails
+# Real Banner, Argos, DegreeWorks, student-level, and local review outputs must not enter source control.
+data/raw/banner/**
+!data/raw/banner/.gitkeep
+data/raw/private/**
+data/private/**
+outputs/**
+reports/private/**
+student_outputs/**
+review_packets/**
+
+# Common local export formats used for student/course-history extracts.
+*.xlsx
+*.xls
+*.xlsm
+*.accdb
+*.mdb
+*.sqlite
+*.sqlite3
+
+# Allow explicitly curated, non-FERPA fixture files under tests.
+!tests/fixtures/**/*.csv
+!tests/fixtures/**/*.xlsx
