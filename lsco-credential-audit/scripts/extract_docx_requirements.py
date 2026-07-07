@@ -198,6 +198,37 @@ def parse_total_row(
     }
 
 
+def split_compressed_course_row(row: dict[str, str]) -> list[dict[str, str]]:
+    text = row["raw_requirement_text"]
+    upper = text.upper()
+
+    if " OR " in upper:
+        return [row]
+
+    course_codes = COURSE_RE.findall(text)
+
+    if len(course_codes) <= 1:
+        return [row]
+
+    parts = re.split(r"(?=\b[A-Z]{3,4}\s+\d{4}\b)", text)
+    parts = [clean_text(part) for part in parts if clean_text(part)]
+
+    if len(parts) != len(course_codes):
+        return [row]
+
+    split_rows = []
+
+    for index, part in enumerate(parts, start=1):
+        new_row = dict(row)
+        new_row["requirement_sequence"] = f'{row["requirement_sequence"]}.{index}'
+        new_row["raw_requirement_text"] = part
+        new_row["rule_type"] = "EXACT"
+        new_row["course_codes"] = course_codes[index - 1]
+        new_row["issue_flags"] = ""
+        split_rows.append(new_row)
+
+    return split_rows
+
 def parse_plan_table(
     *,
     catalog_year: str,
@@ -240,17 +271,17 @@ def parse_plan_table(
             continue
 
         requirement_sequence += 1
-        requirement_rows.append(
-            parse_requirement_row(
-                catalog_year=catalog_year,
-                credential_title=credential_title,
-                table_index=table_index,
-                row_index=row_index,
-                semester_label=semester_label,
-                requirement_sequence=requirement_sequence,
-                cells=cells,
-            )
+        parsed_row = parse_requirement_row(
+            catalog_year=catalog_year,
+            credential_title=credential_title,
+            table_index=table_index,
+            row_index=row_index,
+            semester_label=semester_label,
+            requirement_sequence=requirement_sequence,
+            cells=cells,
         )
+
+        requirement_rows.extend(split_compressed_course_row(parsed_row))
 
     return requirement_rows, total_rows
 
@@ -375,6 +406,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
 
 
 
