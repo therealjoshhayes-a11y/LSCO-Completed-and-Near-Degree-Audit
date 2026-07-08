@@ -28,6 +28,9 @@ SESSION_LABEL_RE = re.compile(
 
 def clean_text(value: str) -> str:
     text = " ".join((value or "").split())
+
+    # Catalog typo observed in Ordinary Seaman tables: NAUT1 #### -> NAUT ####.
+    text = re.sub(r"\bNAUT1\s+(\d{4})\b", r"NAUT \1", text)
     text = re.sub(r"[.?]{2,}", " ", text)
     text = " ".join(text.split())
 
