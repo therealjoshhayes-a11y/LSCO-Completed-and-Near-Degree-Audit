@@ -27,7 +27,13 @@ SESSION_LABEL_RE = re.compile(
 
 
 def clean_text(value: str) -> str:
-    return " ".join((value or "").split())
+    text = " ".join((value or "").split())
+
+    # DOCX exports sometimes collapse the space between a course code
+    # and its title: MRKG 1301Customer -> MRKG 1301 Customer.
+    text = re.sub(r"\b([A-Z]{3,4}\s+\d{4})(?=[A-Za-z])", r"\1 ", text)
+
+    return text
 
 
 def slugify(value: str) -> str:
@@ -72,13 +78,19 @@ def parse_rule_type(text: str) -> str:
     if COURSE_RE.search(text):
         return "EXACT"
 
-    if "APPROVED ELECTIVE" in upper:
+    if "ELECTIVE" in upper:
         return "ELECTIVE"
 
     if "LANGUAGE, PHILOSOPHY, AND CULTURE" in upper:
         return "CORE_BUCKET"
 
+    if "LANG, PHIL, CULTURE" in upper:
+        return "CORE_BUCKET"
+
     if "SOCIAL AND BEHAVIORAL SCIENCE" in upper:
+        return "CORE_BUCKET"
+
+    if "SOCIAL BEHAVIORAL SCIENCE" in upper:
         return "CORE_BUCKET"
 
     if "CREATIVE ARTS" in upper:
@@ -114,14 +126,16 @@ def parse_requirement_row(
     if rule_type == "ANY_N" and len(course_codes) < 2:
         issues.append("ANY_N_WITH_FEWER_THAN_TWO_COURSES")
 
-    if not hours:
+    requirement_hour_values = strip_trailing_total_hours(hours)
+
+    if not requirement_hour_values:
         issues.append("NO_CREDIT_HOURS_FOUND")
         credit_hours = ""
-    elif len(hours) > 1:
+    elif len(requirement_hour_values) > 1:
         issues.append("MULTIPLE_CREDIT_HOUR_VALUES")
-        credit_hours = str(hours[-1])
+        credit_hours = str(requirement_hour_values[0])
     else:
-        credit_hours = str(hours[0])
+        credit_hours = str(requirement_hour_values[0])
 
     if SESSION_LABEL_RE.match(requirement_text):
         rule_type = "NON_COURSE"
@@ -199,6 +213,115 @@ def parse_total_row(
     }
 
 
+
+def strip_trailing_total_hours(hours: list[int]) -> list[int]:
+    """Remove semester/program total values from a parsed hour list.
+
+    DOCX tables sometimes combine requirement cells with trailing
+    Semester Hours and Total Program Hours values. Example:
+        3 3 3 3 3 15 60
+
+    Requirement emission should use only:
+        3 3 3 3 3
+    """
+    values = list(hours)
+
+    # Program totals are normally 30/45/60+ and appear last.
+    if len(values) >= 2 and values[-1] >= 30:
+        values = values[:-1]
+
+    # Semester subtotal usually equals the sum of the preceding row hours.
+    if len(values) >= 2 and values[-1] == sum(values[:-1]):
+        values = values[:-1]
+
+    return values
+
+
+MIXED_NON_COURSE_MARKER_RE = re.compile(
+    r"\b(?:"
+    r"Lang(?:uage)?[, ]+Phil(?:osophy)?[, ]+Culture\s+OR\s+Creative Arts"
+    r"|Language,\s*Philosophy,\s*and Culture"
+    r"|Life\s+and\s+Physical\s+Sciences?"
+    r"|Social\s+Behavioral\s+Science"
+    r"|Component\s+Area\s+Option"
+    r"|BUSI\s+Elective"
+    r"|Business\s+Elective"
+    r"|Elective"
+    r")\b",
+    re.I,
+)
+
+
+def _non_overlapping_marker_matches(text: str) -> list[re.Match]:
+    matches = sorted(MIXED_NON_COURSE_MARKER_RE.finditer(text), key=lambda m: (m.start(), -(m.end() - m.start())))
+    kept = []
+    last_end = -1
+
+    for match in matches:
+        if match.start() < last_end:
+            continue
+        kept.append(match)
+        last_end = match.end()
+
+    return kept
+
+
+def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, str]]:
+    """Split rows mixing course codes with core/elective placeholders.
+
+    Example:
+        MRKG 1301... BUSG 2309... Lang, Phil, Culture OR Creative Arts
+        Social Behavioral Science BUSI Elective
+        hours: 3 3 3 3 3 15 60
+    """
+    text = row["raw_requirement_text"]
+    course_matches = list(COURSE_RE.finditer(text))
+    marker_matches = _non_overlapping_marker_matches(text)
+
+    if not course_matches or not marker_matches:
+        return [row]
+
+    raw_hours_text = row.get("raw_credit_hours_text", row.get("credit_hours", ""))
+    hour_values = strip_trailing_total_hours(parse_hours(raw_hours_text))
+
+    boundaries = []
+    for match in course_matches:
+        boundaries.append((match.start(), "course", match))
+    for match in marker_matches:
+        boundaries.append((match.start(), "non_course", match))
+
+    boundaries.sort(key=lambda item: item[0])
+
+    # Only use this splitter when it discovers more fragments than course-only parsing.
+    if len(boundaries) <= len(course_matches):
+        return [row]
+
+    if len(hour_values) < len(boundaries):
+        return [row]
+
+    split_rows = []
+
+    for index, (start, kind, match) in enumerate(boundaries, start=1):
+        end = boundaries[index][0] if index < len(boundaries) else len(text)
+        fragment = clean_text(text[start:end])
+
+        if not fragment:
+            return [row]
+
+        new_row = dict(row)
+        new_row["requirement_sequence"] = f'{row["requirement_sequence"]}.{index}'
+        new_row["raw_requirement_text"] = fragment
+        new_row["credit_hours"] = str(hour_values[index - 1])
+
+        fragment_courses = COURSE_RE.findall(fragment)
+        new_row["course_codes"] = ";".join(fragment_courses)
+        new_row["rule_type"] = parse_rule_type(fragment)
+        new_row["issue_flags"] = ""
+
+        split_rows.append(new_row)
+
+    return split_rows
+
 def split_leading_or_compressed_row(row: dict[str, str]) -> list[dict[str, str]]:
     text = row["raw_requirement_text"]
     upper = text.upper()
@@ -208,7 +331,7 @@ def split_leading_or_compressed_row(row: dict[str, str]) -> list[dict[str, str]]
 
     course_codes = COURSE_RE.findall(text)
     raw_hours_text = row.get("raw_credit_hours_text", row.get("credit_hours", ""))
-    hour_values = parse_hours(raw_hours_text)
+    hour_values = strip_trailing_total_hours(parse_hours(raw_hours_text))
 
     if len(course_codes) < 3:
         return [row]
@@ -258,7 +381,15 @@ def split_compressed_course_row(row: dict[str, str]) -> list[dict[str, str]]:
     upper = text.upper()
 
     if " OR " in upper:
-        return split_leading_or_compressed_row(row)
+        leading_split = split_leading_or_compressed_row(row)
+        if len(leading_split) > 1:
+            return leading_split
+
+        mixed_split = split_mixed_course_core_elective_row(row)
+        if len(mixed_split) > 1:
+            return mixed_split
+
+        return [row]
 
     course_codes = COURSE_RE.findall(text)
 
@@ -272,7 +403,7 @@ def split_compressed_course_row(row: dict[str, str]) -> list[dict[str, str]]:
         return [row]
 
     raw_hours_text = row.get("raw_credit_hours_text", row.get("credit_hours", ""))
-    hour_values = parse_hours(raw_hours_text)
+    hour_values = strip_trailing_total_hours(parse_hours(raw_hours_text))
 
     if len(hour_values) < len(course_codes):
         return [row]
