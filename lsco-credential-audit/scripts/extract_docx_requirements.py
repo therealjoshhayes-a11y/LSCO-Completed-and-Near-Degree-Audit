@@ -296,13 +296,14 @@ MIXED_NON_COURSE_MARKER_RE = re.compile(
     r"\b(?:"
     r"Lang(?:uage)?[, ]+Phil(?:osophy)?(?:,?\s+and)?[, ]+Culture(?:\s+CORE(?:\s+0?40)?)?\s+OR\s+Creative\s+Arts(?:\s+CORE(?:\s+0?50)?)?"
     r"|Language,\s*Philosophy,\s*and\s+Culture(?:\s+CORE(?:\s+0?40)?)?"
+    r"|Language\s+and\s+Philosophy\s+or\s+Creative\s+Arts"
     r"|American\s+History(?:\s+CORE\s+0?60)?"
     r"|Communication(?:\s+CORE\s+0?10)?"
     r"|Government/Political\s+Science\s+CORE\s+0?70"
     r"|Life\s+and\s+Physical\s+Sciences?(?:\s+CORE\s+0?30)?"
     r"|Mathematics(?:\s+CORE(?:\s+0?20)?)?"
     r"|Creative\s+Arts(?:\s+CORE(?:\s+0?50)?)?"
-    r"|Social\s+(?:and\s+)?Behavioral\s+Science(?:\s+CORE)?"
+    r"|Social\s+(?:and\s+)?Behavioral\s+Sciences?(?:\s+CORE)?"
     r"|Component\s+Area\s+Option(?:\s+CORE\s+0?90)?"
     r"|BUSI\s+Elective"
     r"|Business\s+Elective"
@@ -460,9 +461,29 @@ def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, 
     while index < len(fragments):
         fragment = fragments[index]
 
-        if index + 1 < len(fragments) and re.search(r"\(?\s*OR(?:\s+CORE)?\s*$", fragment, re.I) or re.search(r"\bOR\s*$", fragment, re.I):
-            grouped_fragments.append(clean_text(f"{fragment} {fragments[index + 1]}"))
-            index += 2
+        if (
+            index + 1 < len(fragments)
+            and (
+                re.search(r"\(?\s*OR(?:\s+CORE)?\s*$", fragment, re.I)
+                or re.search(r"\bOR\s*$", fragment, re.I)
+            )
+        ):
+            # Group chained OR options into one requirement:
+            #   MATH 1314 ... or MATH 1332 ... or MATH 1342 ...
+            combined_fragment = fragment
+            index += 1
+
+            while index < len(fragments):
+                combined_fragment = clean_text(f"{combined_fragment} {fragments[index]}")
+                index += 1
+
+                if not (
+                    re.search(r"\(?\s*OR(?:\s+CORE)?\s*$", combined_fragment, re.I)
+                    or re.search(r"\bOR\s*$", combined_fragment, re.I)
+                ):
+                    break
+
+            grouped_fragments.append(combined_fragment)
         elif (
             index + 1 < len(fragments)
             and re.fullmatch(r"Elective", fragments[index + 1], re.I)
@@ -552,9 +573,27 @@ def split_internal_or_compressed_course_row(row: dict[str, str]) -> list[dict[st
     while index < len(parts):
         part = parts[index]
 
-        if index + 1 < len(parts) and re.search(r"\(?\s*OR(?:\s+CORE)?\s*$", part, re.I) or re.search(r"\bOR\s*$", part, re.I):
-            grouped_parts.append(clean_text(f"{part} {parts[index + 1]}"))
-            index += 2
+        if (
+            index + 1 < len(parts)
+            and (
+                re.search(r"\(?\s*OR(?:\s+CORE)?\s*$", part, re.I)
+                or re.search(r"\bOR\s*$", part, re.I)
+            )
+        ):
+            combined_part = part
+            index += 1
+
+            while index < len(parts):
+                combined_part = clean_text(f"{combined_part} {parts[index]}")
+                index += 1
+
+                if not (
+                    re.search(r"\(?\s*OR(?:\s+CORE)?\s*$", combined_part, re.I)
+                    or re.search(r"\bOR\s*$", combined_part, re.I)
+                ):
+                    break
+
+            grouped_parts.append(combined_part)
         else:
             grouped_parts.append(part)
             index += 1
@@ -744,7 +783,7 @@ def parse_plan_table(
             semester_label = first_cell
             continue
 
-        if SEMESTER_RE.match(first_cell):
+        if SEMESTER_RE.match(first_cell) or re.fullmatch(r"Summer\s+Session", first_cell, re.I):
             semester_label = first_cell
             continue
 
