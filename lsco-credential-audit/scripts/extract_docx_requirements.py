@@ -1545,6 +1545,93 @@ def repair_ordinary_seaman_iii_merged_fourth_semester(
 
 
 
+def repair_communication_2022_fourth_semester_electives(
+    requirements: list[dict[str, str]],
+    totals: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Recover compressed Communication 2022 Fourth Semester elective tail.
+
+    Source row shape:
+        SPCH 2335
+        SPCH 2341
+        APPROVED ACADEMIC ELECTIVE
+        APPROVED ACADEMIC ELECTIVE
+        APPROVED ACADEMIC ELECTIVE
+        Semester Hours Total Program Hours | 3 3 3 3 1 13 60
+
+    Generic compression currently captures only 9 of the 13 Fourth Semester hours.
+    """
+
+    repaired = [dict(row) for row in requirements]
+
+    target_id = "COMMUNICATION_2022"
+
+    existing = {
+        (
+            str(row.get("credential_id", "")),
+            str(row.get("semester_label", "")),
+            str(row.get("requirement_sequence", "")),
+            str(row.get("credit_hours", "")),
+            str(row.get("raw_requirement_text", "")),
+        )
+        for row in repaired
+    }
+
+    has_target_total = any(
+        str(total.get("credential_id", "")) == target_id
+        and str(total.get("semester_label", "")) == "Fourth Semester"
+        and parse_hours(str(total.get("raw_hours_text", ""))) == [3, 3, 3, 3, 1, 13, 60]
+        for total in totals
+    )
+
+    if not has_target_total:
+        return repaired
+
+    target_rows = [
+        row for row in repaired
+        if str(row.get("credential_id", "")) == target_id
+        and str(row.get("semester_label", "")) == "Fourth Semester"
+    ]
+
+    parsed_hours = sum(
+        int(str(row.get("credit_hours", "0") or "0"))
+        for row in target_rows
+        if str(row.get("credit_hours", "0") or "0").isdigit()
+    )
+
+    if parsed_hours >= 13:
+        return repaired
+
+    base = target_rows[-1] if target_rows else next(
+        row for row in repaired if str(row.get("credential_id", "")) == target_id
+    )
+
+    additions = [
+        ("4.2.3", "3", "APPROVED ACADEMIC ELECTIVE"),
+        ("4.2.4", "1", "APPROVED ACADEMIC ELECTIVE"),
+    ]
+
+    for sequence, hours, label in additions:
+        key = (target_id, "Fourth Semester", sequence, hours, label)
+        if key in existing:
+            continue
+
+        new_row = dict(base)
+        new_row["requirement_sequence"] = sequence
+        new_row["semester_label"] = "Fourth Semester"
+        new_row["raw_requirement_text"] = label
+        new_row["credit_hours"] = hours
+        new_row["raw_credit_hours_text"] = "3 3 3 3 1 13 60"
+        new_row["rule_type"] = "ELECTIVE"
+        new_row["course_codes"] = ""
+        new_row["issue_flags"] = "REPAIRED_COMPRESSED_COMMUNICATION_2022_ELECTIVE_TAIL"
+        repaired.append(new_row)
+        existing.add(key)
+
+    return repaired
+
+
+
 def repair_court_reporting_second_semester_total(
     totals: list[dict[str, str]],
 ) -> list[dict[str, str]]:
@@ -2398,6 +2485,7 @@ def extract_catalog(record) -> None:
     all_requirements = repair_adjacent_elective_option_rows(all_requirements)
     all_requirements, all_totals = repair_repeated_semester_total_labels(all_requirements, all_totals)
     all_requirements, all_totals = repair_ordinary_seaman_iii_term_sequence(all_requirements, all_totals)
+    all_requirements = repair_communication_2022_fourth_semester_electives(all_requirements, all_totals)
     all_totals = repair_combined_semester_program_total_rows(all_totals)
     all_totals = repair_court_reporting_second_semester_total(all_totals)
     all_totals = repair_compact_total_row_semester_hours(all_totals)
