@@ -1271,7 +1271,26 @@ def split_simple_compressed_course_stack_row(row: dict[str, str]) -> list[dict[s
     for index, match in enumerate(course_matches):
         start = match.start()
         end = course_matches[index + 1].start() if index + 1 < len(course_matches) else len(text)
-        fragments.append(clean_text(text[start:end]))
+        fragment = clean_text(text[start:end])
+
+        # DOCX can compress a rubric elective option onto the end of the
+        # previous course option:
+        #   CRIJ 2328 ... (Capstone Course) CRIJ/CJSA elective OR
+        #   EDUC 1300 Learning Framework
+        rubric_elective_match = re.search(
+            r"\b((?:CRIJ|CJSA|CJCR)(?:/(?:CRIJ|CJSA|CJCR))+\s+elective\s+OR\s*)$",
+            fragment,
+            re.I,
+        )
+        if rubric_elective_match:
+            prefix = clean_text(fragment[:rubric_elective_match.start()])
+            suffix = clean_text(rubric_elective_match.group(1))
+            if prefix:
+                fragments.append(prefix)
+            if suffix:
+                fragments.append(suffix)
+        else:
+            fragments.append(fragment)
 
     grouped: list[str] = []
     current = ""
@@ -1291,6 +1310,31 @@ def split_simple_compressed_course_stack_row(row: dict[str, str]) -> list[dict[s
 
     if current:
         grouped.append(current)
+
+    # A grouped criminal justice course option may still carry a trailing
+    # rubric-elective option that should be its own requirement:
+    #   CRIJ 2314 ... OR CRIJ 2328 ... (Capstone Course) CRIJ/CJSA elective OR EDUC 1300
+    # should become:
+    #   CRIJ 2314 ... OR CRIJ 2328 ...
+    #   CRIJ/CJSA elective OR EDUC 1300
+    regrouped: list[str] = []
+    for fragment in grouped:
+        tail_match = re.search(
+            r"\s+((?:CRIJ|CJSA|CJCR)(?:/(?:CRIJ|CJSA|CJCR))+\s+elective\s+OR\s+.+)$",
+            fragment,
+            re.I,
+        )
+        if tail_match:
+            prefix = clean_text(fragment[:tail_match.start()])
+            suffix = clean_text(tail_match.group(1))
+            if prefix:
+                regrouped.append(prefix)
+            if suffix:
+                regrouped.append(suffix)
+        else:
+            regrouped.append(fragment)
+
+    grouped = regrouped
 
     if len(grouped) < 2:
         return None
@@ -1452,6 +1496,7 @@ def split_compressed_criminal_justice_stack_row(row: dict[str, str]) -> list[dic
             re.search(r"\(\s*or\s*\*?\s*$", current, re.I)
             or re.search(r"\bOR\s+\*\s*$", current, re.I)
             or re.search(r"\bAND\s+\*\s*$", current, re.I)
+            or re.search(r"\bOR\s*$", current, re.I)
         )
 
         if should_continue:
@@ -1462,6 +1507,25 @@ def split_compressed_criminal_justice_stack_row(row: dict[str, str]) -> list[dic
 
     if current:
         grouped.append(current)
+
+    regrouped: list[str] = []
+    for fragment in grouped:
+        tail_match = re.search(
+            r"\s+((?:CRIJ|CJSA|CJCR)(?:/(?:CRIJ|CJSA|CJCR))+\s+elective\s+OR\s+.+)$",
+            fragment,
+            re.I,
+        )
+        if tail_match:
+            prefix = clean_text(fragment[:tail_match.start()])
+            suffix = clean_text(tail_match.group(1))
+            if prefix:
+                regrouped.append(prefix)
+            if suffix:
+                regrouped.append(suffix)
+        else:
+            regrouped.append(fragment)
+
+    grouped = regrouped
 
     if len(grouped) < 2:
         return None
