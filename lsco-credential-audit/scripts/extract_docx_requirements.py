@@ -398,6 +398,17 @@ def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, 
         if index + 1 < len(fragments) and re.search(r"\(?\s*OR\s*$", fragment, re.I):
             grouped_fragments.append(clean_text(f"{fragment} {fragments[index + 1]}"))
             index += 2
+        elif (
+            index + 1 < len(fragments)
+            and re.fullmatch(r"Elective", fragments[index + 1], re.I)
+            and (
+                "CREATIVE ARTS" in fragment.upper()
+                or "LANGUAGE, PHILOSOPHY" in fragment.upper()
+                or "LANG, PHIL" in fragment.upper()
+            )
+        ):
+            grouped_fragments.append(clean_text(f"{fragment} {fragments[index + 1]}"))
+            index += 2
         else:
             grouped_fragments.append(fragment)
             index += 1
