@@ -1126,6 +1126,105 @@ def write_csv(path: Path, rows: list[dict[str, str]], fieldnames: list[str]) -> 
         writer.writerows(rows)
 
 
+
+def repair_parenthetical_or_split_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Repair DOCX rows split across parenthetical OR course equivalents.
+
+    Example:
+        CJSA 1327 (or
+        CRIJ 1310) Fundamentals of Criminal Law
+
+    becomes:
+        CJSA 1327 (or CRIJ 1310) Fundamentals of Criminal Law
+    """
+
+    repaired: list[dict[str, str]] = []
+    index = 0
+
+    while index < len(rows):
+        current = dict(rows[index])
+        next_row = dict(rows[index + 1]) if index + 1 < len(rows) else None
+
+        current_text = clean_text(current.get("raw_requirement_text", ""))
+        next_text = clean_text(next_row.get("raw_requirement_text", "")) if next_row else ""
+
+        same_requirement_group = (
+            next_row is not None
+            and current.get("credential_id") == next_row.get("credential_id")
+            and current.get("source_table_index") == next_row.get("source_table_index")
+            and current.get("semester_label") == next_row.get("semester_label")
+        )
+
+        split_parenthetical_or = (
+            same_requirement_group
+            and re.search(r"\(\s*or\s*$", current_text, re.I)
+            and re.match(r"[A-Z]{3,4}\s+\d{4}\)", next_text)
+        )
+
+        if split_parenthetical_or:
+            merged_text = clean_text(f"{current_text} {next_text}")
+            current["raw_requirement_text"] = merged_text
+            current["course_codes"] = ";".join(dict.fromkeys(COURSE_RE.findall(merged_text)))
+            current["rule_type"] = "ANY_N" if re.search(r"\(\s*or\s+[A-Z]{3,4}\s+\d{4}\)", merged_text, re.I) else parse_rule_type(merged_text)
+
+            flags = [
+                flag for flag in str(current.get("issue_flags", "")).split(";")
+                if flag and flag.lower() != "nan"
+            ]
+            flags.append("REPAIRED_PARENTHETICAL_OR_SPLIT")
+            current["issue_flags"] = ";".join(dict.fromkeys(flags))
+
+            repaired.append(current)
+            index += 2
+        else:
+            repaired.append(current)
+            index += 1
+
+    # If a repair removed a row from a semester group, realign row-level hours
+    # from the original raw hour stream so semester/program totals are not
+    # assigned as requirement hours.
+    by_group: dict[tuple[str, str, str], list[int]] = {}
+    for row_index, row in enumerate(repaired):
+        key = (
+            str(row.get("credential_id", "")),
+            str(row.get("source_table_index", "")),
+            str(row.get("semester_label", "")),
+        )
+        by_group.setdefault(key, []).append(row_index)
+
+    for indexes in by_group.values():
+        if not indexes:
+            continue
+
+        raw_hours_text = ""
+        for row_index in indexes:
+            candidate = (
+                repaired[row_index].get("raw_credit_hours_text")
+                or repaired[row_index].get("raw_hours_text")
+                or ""
+            )
+            if len(parse_hours(str(candidate))) > len(parse_hours(str(raw_hours_text))):
+                raw_hours_text = str(candidate)
+
+        parsed_hours = parse_hours(raw_hours_text)
+
+        # Only realign when the group carries a multi-hour stream that also
+        # includes semester/program totals after the row-level requirement hours.
+        if len(parsed_hours) <= len(indexes):
+            continue
+
+        hour_values = parsed_hours[:len(indexes)]
+
+        if len(hour_values) != len(indexes):
+            continue
+
+        for offset, row_index in enumerate(indexes):
+            repaired[row_index]["credit_hours"] = str(hour_values[offset])
+
+    return repaired
+
+
+
 def extract_catalog(record) -> None:
     doc = Document(record.source_docx_path)
 
@@ -1239,6 +1338,8 @@ def extract_catalog(record) -> None:
                 base_id = f'{slugify(row["credential_title"])}_{suffix}_{record.catalog_year[:4]}'
                 row["credential_id"] = base_id
 
+
+    all_requirements = repair_parenthetical_or_split_rows(all_requirements)
 
     out_dir = Path("data") / "processed" / "catalogs" / record.catalog_year
 
