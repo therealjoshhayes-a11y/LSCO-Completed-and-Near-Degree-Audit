@@ -93,6 +93,24 @@ def parse_rule_type(text: str) -> str:
     if "SOCIAL BEHAVIORAL SCIENCE" in upper:
         return "CORE_BUCKET"
 
+    if "AMERICAN HISTORY CORE" in upper:
+        return "CORE_BUCKET"
+
+    if "COMMUNICATION CORE" in upper:
+        return "CORE_BUCKET"
+
+    if "GOVERNMENT/POLITICAL SCIENCE CORE" in upper:
+        return "CORE_BUCKET"
+
+    if "LIFE AND PHYSICAL SCIENCE" in upper:
+        return "CORE_BUCKET"
+
+    if "LIFE AND PHYSICAL SCIENCES" in upper:
+        return "CORE_BUCKET"
+
+    if "MATHEMATICS CORE" in upper:
+        return "CORE_BUCKET"
+
     if "CREATIVE ARTS" in upper:
         return "CORE_BUCKET"
 
@@ -240,10 +258,15 @@ def strip_trailing_total_hours(hours: list[int]) -> list[int]:
 MIXED_NON_COURSE_MARKER_RE = re.compile(
     r"\b(?:"
     r"Lang(?:uage)?[, ]+Phil(?:osophy)?[, ]+Culture\s+OR\s+Creative Arts"
-    r"|Language,\s*Philosophy,\s*and Culture"
-    r"|Life\s+and\s+Physical\s+Sciences?"
-    r"|Social\s+Behavioral\s+Science"
-    r"|Component\s+Area\s+Option"
+    r"|Language,\s*Philosophy,\s*and\s+Culture(?:\s+CORE\s+0?40)?"
+    r"|American\s+History\s+CORE\s+0?60"
+    r"|Communication\s+CORE\s+0?10"
+    r"|Government/Political\s+Science\s+CORE\s+0?70"
+    r"|Life\s+and\s+Physical\s+Sciences?(?:\s+CORE\s+0?30)?"
+    r"|Mathematics\s+CORE\s+0?20"
+    r"|Creative\s+Arts(?:\s+CORE\s+0?50)?"
+    r"|Social\s+(?:and\s+)?Behavioral\s+Science(?:\s+CORE)?"
+    r"|Component\s+Area\s+Option(?:\s+CORE\s+0?90)?"
     r"|BUSI\s+Elective"
     r"|Business\s+Elective"
     r"|Elective"
@@ -252,14 +275,37 @@ MIXED_NON_COURSE_MARKER_RE = re.compile(
 )
 
 
+def _is_parenthetical_annotation(text: str, match: re.Match) -> bool:
+    """Skip core markers that are parenthetical annotations on a course.
+
+    Example:
+        ENGL 1301 (COMMUNICATION CORE 010)
+
+    That should stay attached to ENGL 1301, while a later standalone
+    AMERICAN HISTORY CORE 060 should become its own requirement.
+    """
+    last_open = text.rfind("(", 0, match.start())
+    last_close = text.rfind(")", 0, match.start())
+
+    if last_open <= last_close:
+        return False
+
+    next_close = text.find(")", match.end())
+    return next_close != -1
+
+
 def _non_overlapping_marker_matches(text: str) -> list[re.Match]:
     matches = sorted(MIXED_NON_COURSE_MARKER_RE.finditer(text), key=lambda m: (m.start(), -(m.end() - m.start())))
     kept = []
     last_end = -1
 
     for match in matches:
+        if _is_parenthetical_annotation(text, match):
+            continue
+
         if match.start() < last_end:
             continue
+
         kept.append(match)
         last_end = match.end()
 
@@ -269,10 +315,10 @@ def _non_overlapping_marker_matches(text: str) -> list[re.Match]:
 def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, str]]:
     """Split rows mixing course codes with core/elective placeholders.
 
-    Example:
-        MRKG 1301... BUSG 2309... Lang, Phil, Culture OR Creative Arts
-        Social Behavioral Science BUSI Elective
-        hours: 3 3 3 3 3 15 60
+    Handles:
+        course + standalone core placeholder
+        course OR standalone core/elective placeholder
+        course + core + course OR elective + course
     """
     text = row["raw_requirement_text"]
     course_matches = list(COURSE_RE.finditer(text))
@@ -292,22 +338,38 @@ def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, 
 
     boundaries.sort(key=lambda item: item[0])
 
-    # Only use this splitter when it discovers more fragments than course-only parsing.
     if len(boundaries) <= len(course_matches):
         return [row]
 
-    if len(hour_values) < len(boundaries):
-        return [row]
-
-    split_rows = []
-
-    for index, (start, kind, match) in enumerate(boundaries, start=1):
-        end = boundaries[index][0] if index < len(boundaries) else len(text)
+    fragments = []
+    for index, (start, kind, match) in enumerate(boundaries):
+        end = boundaries[index + 1][0] if index + 1 < len(boundaries) else len(text)
         fragment = clean_text(text[start:end])
 
         if not fragment:
             return [row]
 
+        fragments.append(fragment)
+
+    grouped_fragments: list[str] = []
+    index = 0
+
+    while index < len(fragments):
+        fragment = fragments[index]
+
+        if index + 1 < len(fragments) and re.search(r"\bOR\s*$", fragment, re.I):
+            grouped_fragments.append(clean_text(f"{fragment} {fragments[index + 1]}"))
+            index += 2
+        else:
+            grouped_fragments.append(fragment)
+            index += 1
+
+    if len(grouped_fragments) != len(hour_values):
+        return [row]
+
+    split_rows = []
+
+    for index, fragment in enumerate(grouped_fragments, start=1):
         new_row = dict(row)
         new_row["requirement_sequence"] = f'{row["requirement_sequence"]}.{index}'
         new_row["raw_requirement_text"] = fragment
@@ -321,7 +383,6 @@ def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, 
         split_rows.append(new_row)
 
     return split_rows
-
 
 def split_internal_or_compressed_course_row(row: dict[str, str]) -> list[dict[str, str]]:
     """Split compressed course rows where one requirement is an internal OR pair.
@@ -447,6 +508,10 @@ def split_compressed_course_row(row: dict[str, str]) -> list[dict[str, str]]:
     text = row["raw_requirement_text"]
     upper = text.upper()
 
+    mixed_split = split_mixed_course_core_elective_row(row)
+    if len(mixed_split) > 1:
+        return mixed_split
+
     if " OR " in upper:
         leading_split = split_leading_or_compressed_row(row)
         if len(leading_split) > 1:
@@ -455,10 +520,6 @@ def split_compressed_course_row(row: dict[str, str]) -> list[dict[str, str]]:
         internal_or_split = split_internal_or_compressed_course_row(row)
         if len(internal_or_split) > 1:
             return internal_or_split
-
-        mixed_split = split_mixed_course_core_elective_row(row)
-        if len(mixed_split) > 1:
-            return mixed_split
 
         return [row]
 
