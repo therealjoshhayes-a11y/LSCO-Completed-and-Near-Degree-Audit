@@ -322,6 +322,73 @@ def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, 
 
     return split_rows
 
+
+def split_internal_or_compressed_course_row(row: dict[str, str]) -> list[dict[str, str]]:
+    """Split compressed course rows where one requirement is an internal OR pair.
+
+    Example:
+        ACCT 2301 ... ACNT 1329 ... BUSG 1304 ...
+        COSC 1301 ... OR BCIS 1305 ... BMGT 1327 ...
+        hours: 3 3 3 3 3 15
+
+    Expected emitted requirements:
+        ACCT 2301
+        ACNT 1329
+        BUSG 1304
+        COSC 1301 OR BCIS 1305
+        BMGT 1327
+    """
+    text = row["raw_requirement_text"]
+
+    if " OR " not in text.upper():
+        return [row]
+
+    course_codes = COURSE_RE.findall(text)
+    if len(course_codes) < 3:
+        return [row]
+
+    parts = re.split(r"(?=\b[A-Z]{3,4}\s+\d{4}\b)", text)
+    parts = [clean_text(part) for part in parts if clean_text(part)]
+
+    if len(parts) != len(course_codes):
+        return [row]
+
+    raw_hours_text = row.get("raw_credit_hours_text", row.get("credit_hours", ""))
+    hour_values = strip_trailing_total_hours(parse_hours(raw_hours_text))
+
+    grouped_parts: list[str] = []
+    index = 0
+
+    while index < len(parts):
+        part = parts[index]
+
+        if index + 1 < len(parts) and re.search(r"\bOR\s*$", part, re.I):
+            grouped_parts.append(clean_text(f"{part} {parts[index + 1]}"))
+            index += 2
+        else:
+            grouped_parts.append(part)
+            index += 1
+
+    if len(grouped_parts) != len(hour_values):
+        return [row]
+
+    split_rows = []
+
+    for idx, part in enumerate(grouped_parts, start=1):
+        new_row = dict(row)
+        new_row["requirement_sequence"] = f'{row["requirement_sequence"]}.{idx}'
+        new_row["raw_requirement_text"] = clean_text(part)
+        new_row["credit_hours"] = str(hour_values[idx - 1])
+
+        fragment_courses = COURSE_RE.findall(part)
+        new_row["course_codes"] = ";".join(fragment_courses)
+        new_row["rule_type"] = parse_rule_type(part)
+        new_row["issue_flags"] = ""
+
+        split_rows.append(new_row)
+
+    return split_rows
+
 def split_leading_or_compressed_row(row: dict[str, str]) -> list[dict[str, str]]:
     text = row["raw_requirement_text"]
     upper = text.upper()
@@ -384,6 +451,10 @@ def split_compressed_course_row(row: dict[str, str]) -> list[dict[str, str]]:
         leading_split = split_leading_or_compressed_row(row)
         if len(leading_split) > 1:
             return leading_split
+
+        internal_or_split = split_internal_or_compressed_course_row(row)
+        if len(internal_or_split) > 1:
+            return internal_or_split
 
         mixed_split = split_mixed_course_core_elective_row(row)
         if len(mixed_split) > 1:
