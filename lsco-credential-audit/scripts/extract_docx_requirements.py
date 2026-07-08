@@ -1130,6 +1130,265 @@ def write_csv(path: Path, rows: list[dict[str, str]], fieldnames: list[str]) -> 
 
 
 
+
+def split_compact_core_total_text(text: str, hour_values: list[int]) -> list[str] | None:
+    """Split compact core/elective total-row text into requirement fragments."""
+
+    working = clean_text(text)
+    working = re.sub(r"\bSemester Hours\b.*$", "", working, flags=re.I).strip()
+    working = re.sub(r"\bTotal Program Hours\b.*$", "", working, flags=re.I).strip()
+
+    if not working:
+        return None
+
+    patterns = [
+        r"EDUC\s+1300\s+\([^)]*CORE\s+\d{3}\)",
+        r"ENGL\s+1301\s+\([^)]*CORE\s+\d{3}\)",
+        r"AMERICAN\s+HISTORY\s+CORE\s+\d{3}",
+        r"MATHEMATICS\s+CORE\s+\d{3}",
+        r"CREATIVE\s+ARTS\s+CORE\s+\d{3}",
+        r"COMMUNICATION\s+CORE\s+\d{3}",
+        r"LANGUAGE,\s*PHILOSOPHY,\s+AND\s+CULTURE\s+CORE\s+\d{3}",
+        r"GOVERNMENT/POLITICAL\s+SCIENCE\s+CORE\s+\d{3}",
+        r"LIFE\s+AND\s+PHYSICAL\s+SCIENCES\s+CORE\s+\d{3}",
+        r"SOCIAL\s+AND\s+BEHAVIORAL\s+SCIENCE\s+CORE\s+\d{3}",
+        r"COMPONENT\s+AREA\s+OPTION\s+CORE\s+\d{3}",
+        r"APPROVED\s+ACADEMIC\s+ELECTIVE",
+    ]
+
+    token_re = re.compile("|".join(f"({pattern})" for pattern in patterns), re.I)
+    matches = list(token_re.finditer(working))
+
+    if not matches:
+        return None
+
+    fragments = [clean_text(match.group(0)) for match in matches]
+
+    return fragments
+
+
+
+def repair_compact_total_row_semester_hours(totals: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Fix only compact rows where semester total was misfiled as program total.
+
+    Narrow target:
+        raw_hours_text = 3 3 4 3 3 13
+        semester_hours = 3
+        total_program_hours = 13
+
+    If the first N hour values, where N is the number of parsed requirement
+    fragments, sum to the value stored as total_program_hours, then that value
+    is the semester total, not the program total.
+    """
+
+    repaired = [dict(row) for row in totals]
+
+    for row in repaired:
+        raw_total_text = str(row.get("raw_total_text", ""))
+        raw_hours_text = str(row.get("raw_hours_text", ""))
+
+        if "Semester Hours" not in raw_total_text or "Total Program Hours" not in raw_total_text:
+            continue
+
+        parsed_hours = parse_hours(raw_hours_text)
+        if len(parsed_hours) < 3:
+            continue
+
+        fragments = split_compact_core_total_text(raw_total_text, parsed_hours)
+        if not fragments:
+            continue
+
+        fragment_count = len(fragments)
+        if fragment_count >= len(parsed_hours):
+            continue
+
+        try:
+            declared_semester_total = int(float(row.get("semester_hours", "")))
+        except (TypeError, ValueError):
+            continue
+
+        try:
+            declared_program_total = int(float(row.get("total_program_hours", "")))
+        except (TypeError, ValueError):
+            continue
+
+        leading_requirement_hours = parsed_hours[:fragment_count]
+        leading_total = sum(leading_requirement_hours)
+
+        # Do not touch normal rows like:
+        #   3 3 3 3 4 16 60
+        # where semester_hours is already 16 and program total is actually 60.
+        if declared_semester_total == leading_total:
+            continue
+
+        # Target only rows where the alleged program total is actually the
+        # semester total for the leading requirement-hour sequence.
+        if declared_program_total != leading_total:
+            continue
+
+        row["semester_hours"] = str(leading_total)
+        row["total_program_hours"] = ""
+
+    return repaired
+
+
+
+
+def synthesize_requirements_from_compact_total_rows(
+    requirements: list[dict[str, str]],
+    totals: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Create requirement rows from compact total rows when parser emitted no rows.
+
+    Some DOCX tables put an entire semester in one table row:
+        AMERICAN HISTORY CORE 060 ... Semester Hours | 3 3 3 3 4 16
+
+    The totals parser sees the semester total, but the requirement parser may not
+    emit individual requirement rows. This repair fills only empty semester blocks.
+    """
+
+    repaired = [dict(row) for row in requirements]
+
+    existing_keys = {
+        (
+            str(row.get("credential_id", "")),
+            str(row.get("source_table_index", "")),
+            str(row.get("semester_label", "")),
+            str(row.get("catalog_year", "")),
+        )
+        for row in repaired
+    }
+
+    for total in totals:
+        semester_label = str(total.get("semester_label", ""))
+        if semester_label not in ORDINAL_SEMESTER_LABELS:
+            continue
+
+        key = (
+            str(total.get("credential_id", "")),
+            str(total.get("source_table_index", "")),
+            semester_label,
+            str(total.get("catalog_year", "")),
+        )
+
+        if key in existing_keys:
+            continue
+
+        semester_hours = total.get("semester_hours")
+        if not semester_hours or str(semester_hours).lower() == "nan":
+            continue
+
+        raw_hours_text = str(total.get("raw_hours_text", ""))
+        parsed_hours = parse_hours(raw_hours_text)
+        if not parsed_hours:
+            continue
+
+        total_program_raw = total.get("total_program_hours", "")
+        try:
+            declared_semester_total = int(float(semester_hours))
+        except (TypeError, ValueError):
+            continue
+
+        try:
+            declared_program_total = int(float(total_program_raw)) if total_program_raw and str(total_program_raw).lower() != "nan" else None
+        except (TypeError, ValueError):
+            declared_program_total = None
+
+        # Prefer the actual hour stream shape over misread total columns.
+        # Compact rows sometimes show:
+        #   3 3 4 3 13
+        # where 13 is the semester total, even if the parser misfiled it as
+        # total_program_hours because the text says "Semester Hours Total Program Hours".
+        if len(parsed_hours) >= 2 and sum(parsed_hours[:-1]) == parsed_hours[-1]:
+            hour_values = parsed_hours[:-1]
+            semester_total = parsed_hours[-1]
+        elif (
+            len(parsed_hours) >= 3
+            and declared_program_total is not None
+            and parsed_hours[-1] == declared_program_total
+            and sum(parsed_hours[:-2]) == parsed_hours[-2]
+        ):
+            hour_values = parsed_hours[:-2]
+            semester_total = parsed_hours[-2]
+        else:
+            semester_total = declared_semester_total
+            hour_values = list(parsed_hours)
+            trailing_totals = {semester_total}
+            if declared_program_total is not None:
+                trailing_totals.add(declared_program_total)
+
+            while hour_values and hour_values[-1] in trailing_totals:
+                hour_values = hour_values[:-1]
+
+        if not hour_values:
+            continue
+
+        fragments = split_compact_core_total_text(str(total.get("raw_total_text", "")), hour_values)
+        if not fragments:
+            continue
+
+        if len(hour_values) != len(fragments) or sum(hour_values) != semester_total:
+            # Some compact rows have one extra stray hour value before the
+            # semester total, or the total columns are misread because the row
+            # says both "Semester Hours" and "Total Program Hours". Choose a
+            # same-order hour subset that matches the fragment count and a
+            # plausible total.
+            from itertools import combinations
+
+            plausible_totals = {semester_total}
+            if parsed_hours:
+                plausible_totals.add(parsed_hours[-1])
+            if declared_program_total is not None:
+                plausible_totals.add(declared_program_total)
+
+            fixed_hour_values = None
+            fixed_semester_total = None
+
+            for target_total in sorted(plausible_totals, reverse=True):
+                for indexes in combinations(range(len(parsed_hours)), len(fragments)):
+                    candidate = [parsed_hours[i] for i in indexes]
+                    if sum(candidate) == target_total:
+                        fixed_hour_values = candidate
+                        fixed_semester_total = target_total
+                        break
+                if fixed_hour_values is not None:
+                    break
+
+            if fixed_hour_values is None:
+                continue
+
+            hour_values = fixed_hour_values
+            semester_total = fixed_semester_total
+
+        try:
+            base_sequence = int(float(total.get("source_row_index", 0)))
+        except (TypeError, ValueError):
+            base_sequence = 0
+
+        for offset, fragment in enumerate(fragments):
+            new_row = {
+                "catalog_year": total.get("catalog_year", ""),
+                "credential_id": total.get("credential_id", ""),
+                "credential_title": total.get("credential_title", ""),
+                "source_table_index": total.get("source_table_index", ""),
+                "source_row_index": total.get("source_row_index", ""),
+                "requirement_sequence": f"{base_sequence}.{offset + 1}",
+                "semester_label": semester_label,
+                "raw_requirement_text": fragment,
+                "credit_hours": str(hour_values[offset]),
+                "raw_credit_hours_text": raw_hours_text,
+                "rule_type": "ELECTIVE" if re.search(r"\bELECTIVE\b", fragment, re.I) else "CORE_BUCKET",
+                "course_codes": ";".join(dict.fromkeys(COURSE_RE.findall(fragment))),
+                "issue_flags": "SYNTHESIZED_FROM_COMPACT_TOTAL_ROW",
+            }
+            repaired.append(new_row)
+
+        existing_keys.add(key)
+
+    return repaired
+
+
+
 ORDINAL_SEMESTER_LABELS = [
     "First Semester",
     "Second Semester",
@@ -1808,6 +2067,8 @@ def extract_catalog(record) -> None:
     all_requirements = repair_parenthetical_or_split_rows(all_requirements)
     all_requirements = repair_adjacent_elective_option_rows(all_requirements)
     all_requirements, all_totals = repair_repeated_semester_total_labels(all_requirements, all_totals)
+    all_totals = repair_compact_total_row_semester_hours(all_totals)
+    all_requirements = synthesize_requirements_from_compact_total_rows(all_requirements, all_totals)
 
     out_dir = Path("data") / "processed" / "catalogs" / record.catalog_year
 
