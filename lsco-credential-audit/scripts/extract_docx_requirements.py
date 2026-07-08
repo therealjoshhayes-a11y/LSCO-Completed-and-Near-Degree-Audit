@@ -102,6 +102,12 @@ def parse_rule_type(text: str) -> str:
     if "COMMUNICATION CORE" in upper:
         return "CORE_BUCKET"
 
+    if upper.strip() == "COMMUNICATION":
+        return "CORE_BUCKET"
+
+    if "COMPONENT AREA OPTION" in upper:
+        return "CORE_BUCKET"
+
     if "GOVERNMENT/POLITICAL SCIENCE CORE" in upper:
         return "CORE_BUCKET"
 
@@ -112,6 +118,9 @@ def parse_rule_type(text: str) -> str:
         return "CORE_BUCKET"
 
     if "MATHEMATICS CORE" in upper:
+        return "CORE_BUCKET"
+
+    if upper.strip() == "MATHEMATICS":
         return "CORE_BUCKET"
 
     if "CREATIVE ARTS" in upper:
@@ -263,10 +272,10 @@ MIXED_NON_COURSE_MARKER_RE = re.compile(
     r"Lang(?:uage)?[, ]+Phil(?:osophy)?[, ]+Culture\s+OR\s+Creative Arts"
     r"|Language,\s*Philosophy,\s*and\s+Culture(?:\s+CORE\s+0?40)?"
     r"|American\s+History\s+CORE\s+0?60"
-    r"|Communication\s+CORE\s+0?10"
+    r"|Communication(?:\s+CORE\s+0?10)?"
     r"|Government/Political\s+Science\s+CORE\s+0?70"
     r"|Life\s+and\s+Physical\s+Sciences?(?:\s+CORE\s+0?30)?"
-    r"|Mathematics\s+CORE\s+0?20"
+    r"|Mathematics(?:\s+CORE\s+0?20)?"
     r"|Creative\s+Arts(?:\s+CORE\s+0?50)?"
     r"|Social\s+(?:and\s+)?Behavioral\s+Science(?:\s+CORE)?"
     r"|Component\s+Area\s+Option(?:\s+CORE\s+0?90)?"
@@ -360,7 +369,7 @@ def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, 
     while index < len(fragments):
         fragment = fragments[index]
 
-        if index + 1 < len(fragments) and re.search(r"\bOR\s*$", fragment, re.I):
+        if index + 1 < len(fragments) and re.search(r"\(?\s*OR\s*$", fragment, re.I):
             grouped_fragments.append(clean_text(f"{fragment} {fragments[index + 1]}"))
             index += 2
         else:
@@ -404,7 +413,7 @@ def split_internal_or_compressed_course_row(row: dict[str, str]) -> list[dict[st
     """
     text = row["raw_requirement_text"]
 
-    if " OR " not in text.upper():
+    if " OR " not in text.upper() and not re.search(r"\(\s*or\s+[A-Z]{3,4}\s+\d{4}", text, re.I):
         return [row]
 
     course_codes = COURSE_RE.findall(text)
@@ -426,7 +435,7 @@ def split_internal_or_compressed_course_row(row: dict[str, str]) -> list[dict[st
     while index < len(parts):
         part = parts[index]
 
-        if index + 1 < len(parts) and re.search(r"\bOR\s*$", part, re.I):
+        if index + 1 < len(parts) and re.search(r"\(?\s*OR\s*$", part, re.I):
             grouped_parts.append(clean_text(f"{part} {parts[index + 1]}"))
             index += 2
         else:
@@ -514,6 +523,11 @@ def split_compressed_course_row(row: dict[str, str]) -> list[dict[str, str]]:
     mixed_split = split_mixed_course_core_elective_row(row)
     if len(mixed_split) > 1:
         return mixed_split
+
+    if re.search(r"\(\s*or\s+[A-Z]{3,4}\s+\d{4}", text, re.I):
+        internal_or_split = split_internal_or_compressed_course_row(row)
+        if len(internal_or_split) > 1:
+            return internal_or_split
 
     if " OR " in upper:
         leading_split = split_leading_or_compressed_row(row)
