@@ -1679,7 +1679,11 @@ def remove_massage_therapy_contact_hours_requirement(
         raw_text = clean_text(str(row.get("raw_requirement_text", "")))
 
         if (
-            credential_id in {"MASSAGE_THERAPY_2024", "MASSAGE_THERAPY_2025"}
+            credential_id in {
+                "MASSAGE_THERAPY_2024",
+                "MASSAGE_THERAPY_2025",
+                "MEDICAL_OFFICE_SUPPORT_2025",
+            }
             and raw_text == "Total Program Contact Hours"
         ):
             continue
