@@ -8,6 +8,7 @@ COMPLETION_GRADES = {"A", "B", "C", "D", "S"}
 STUDENT_COURSES = DATA_DIR / "test" / "student_course_history_normalized.csv"
 REQUIREMENTS = PROCESSED_DIR / "catalogs" / "requirements_master_multiyear.csv"
 CORE_LOOKUP = PROCESSED_DIR / "core_bucket_lookup.csv"
+ELIGIBILITY = PROCESSED_DIR / "student_catalog_eligibility.csv"
 
 DETAIL_OUTPUT = PROCESSED_DIR / "multiyear_sample_audit_results.csv"
 SUMMARY_OUTPUT = PROCESSED_DIR / "multiyear_sample_credential_summary.csv"
@@ -171,6 +172,18 @@ def audit() -> None:
     requirements = pd.read_csv(REQUIREMENTS)
     core_lookup = load_core_lookup()
 
+    if ELIGIBILITY.exists():
+        eligibility = pd.read_csv(ELIGIBILITY, dtype=str)
+    else:
+        eligibility = pd.DataFrame(
+            columns=[
+                "student_id",
+                "catalog_year",
+                "catalog_eligible",
+                "eligibility_reason",
+            ]
+        )
+
     completed = courses[courses["grade"].isin(COMPLETION_GRADES)].copy()
 
     detail_rows = []
@@ -220,6 +233,27 @@ def audit() -> None:
         )
 
     summary_df = pd.DataFrame(summary_rows)
+
+    if not eligibility.empty:
+        keep_cols = [
+            "student_id",
+            "catalog_year",
+            "catalog_eligible",
+            "eligibility_reason",
+            "earned_course_in_catalog_year",
+            "has_activity_after_catalog_life",
+            "continuity_break",
+            "max_missed_long_semesters_between_earned_terms",
+        ]
+
+        available_cols = [column for column in keep_cols if column in eligibility.columns]
+
+        summary_df = summary_df.merge(
+            eligibility[available_cols],
+            on=["student_id", "catalog_year"],
+            how="left",
+        )
+
     summary_df.to_csv(SUMMARY_OUTPUT, index=False)
 
     print(f"Wrote {DETAIL_OUTPUT}")
