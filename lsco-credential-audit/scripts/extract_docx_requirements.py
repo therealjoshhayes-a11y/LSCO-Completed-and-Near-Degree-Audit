@@ -1661,6 +1661,35 @@ def repair_communication_2022_fourth_semester_electives(
 
 
 
+def repair_business_construction_first_semester_total(
+    totals: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Repair known 2021 Business Construction Management First Semester total typo.
+
+    Source row shows Semester Hours = 60, but visible First Semester courses sum to 18.
+    Total Program Hours remains 60 on the separate program total row.
+    """
+
+    repaired = [dict(row) for row in totals]
+
+    for row in repaired:
+        if str(row.get("credential_id", "")) != "BUSINESS_CONSTRUCTION_MANAGEMENT_2021":
+            continue
+
+        if str(row.get("semester_label", "")) != "First Semester":
+            continue
+
+        if str(row.get("semester_hours", "")) != "60":
+            continue
+
+        row["semester_hours"] = "18"
+        row["raw_hours_text"] = "18"
+        row["raw_total_text"] = str(row.get("raw_total_text", "")) + " [NORMALIZED_SOURCE_TOTAL_18]"
+
+    return repaired
+
+
+
 def repair_court_reporting_second_semester_total(
     totals: list[dict[str, str]],
 ) -> list[dict[str, str]]:
@@ -2518,6 +2547,7 @@ def extract_catalog(record) -> None:
     all_requirements = repair_business_real_estate_blank_busi_2304_hours(all_requirements)
     all_totals = repair_combined_semester_program_total_rows(all_totals)
     all_totals = repair_court_reporting_second_semester_total(all_totals)
+    all_totals = repair_business_construction_first_semester_total(all_totals)
     all_totals = repair_compact_total_row_semester_hours(all_totals)
     all_requirements = synthesize_requirements_from_compact_total_rows(all_requirements, all_totals)
 
