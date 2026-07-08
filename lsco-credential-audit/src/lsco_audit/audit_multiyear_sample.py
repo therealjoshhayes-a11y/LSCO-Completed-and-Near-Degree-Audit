@@ -3,19 +3,15 @@ import pandas as pd
 from lsco_audit.paths import DATA_DIR, PROCESSED_DIR
 
 
-COMPLETION_GRADES = {"A", "B", "C", "D", "S"}
+COMPLETION_GRADES = {"A", "B", "C", "D", "S", "E", "T"}
 
-STUDENT_COURSES = DATA_DIR / "test" / "student_course_history_normalized.csv"
+STUDENT_COURSES = PROCESSED_DIR / "student_course_history_normalized.csv"
 REQUIREMENTS = PROCESSED_DIR / "catalogs" / "requirements_master_multiyear.csv"
 CORE_LOOKUP = PROCESSED_DIR / "core_bucket_lookup.csv"
 ELIGIBILITY = PROCESSED_DIR / "student_catalog_eligibility.csv"
 
 DETAIL_OUTPUT = PROCESSED_DIR / "multiyear_sample_audit_results.csv"
 SUMMARY_OUTPUT = PROCESSED_DIR / "multiyear_sample_credential_summary.csv"
-
-
-def normalize_course_set(courses: pd.DataFrame) -> set[str]:
-    return set(courses["course_code"].dropna().astype(str))
 
 
 def normalize_bucket_name(value: str) -> str | None:
@@ -49,6 +45,64 @@ def load_core_lookup() -> dict[str, set[str]]:
         bucket: set(group["course_code"].dropna().astype(str))
         for bucket, group in lookup.groupby("bucket_name")
     }
+
+
+def completed_course_lookup(courses: pd.DataFrame) -> dict[str, dict]:
+    """Return course_code -> resolved successful attempt metadata."""
+
+    courses = courses.copy()
+
+    if "passed" in courses.columns:
+        completed = courses[courses["passed"].astype(str).str.upper().eq("TRUE")].copy()
+    else:
+        completed = courses[
+            courses["grade"].astype(str).str.upper().isin(COMPLETION_GRADES)
+        ].copy()
+
+    completed["term_sort"] = pd.to_numeric(completed["term_sort"], errors="coerce")
+    completed = completed[completed["term_sort"].notna()].copy()
+    completed["term_sort"] = completed["term_sort"].astype(int)
+
+    completed = completed.sort_values(
+        by=["course_code", "term_sort"],
+        ascending=[True, False],
+        kind="mergesort",
+    )
+
+    lookup = {}
+
+    for _, row in completed.drop_duplicates(subset=["course_code"], keep="first").iterrows():
+        course_code = str(row["course_code"])
+        lookup[course_code] = {
+            "course_code": course_code,
+            "term_taken": str(row.get("term_taken", "")),
+            "term_sort": int(row["term_sort"]),
+            "grade": str(row.get("grade", "")),
+        }
+
+    return lookup
+
+
+def latest_attempt_metadata(
+    matched: list[str],
+    course_lookup: dict[str, dict],
+) -> tuple[str, str, str]:
+    matched_rows = [
+        course_lookup[course_code]
+        for course_code in matched
+        if course_code in course_lookup
+    ]
+
+    if not matched_rows:
+        return "", "", ""
+
+    latest = max(matched_rows, key=lambda row: row["term_sort"])
+
+    term_sorts = "; ".join(str(row["term_sort"]) for row in matched_rows)
+    terms = "; ".join(str(row["term_taken"]) for row in matched_rows)
+    grades = "; ".join(str(row["grade"]) for row in matched_rows)
+
+    return str(latest["term_sort"]), str(latest["term_taken"]), grades
 
 
 def audit_non_elective_requirement(
@@ -106,9 +160,10 @@ def get_audit_status(requirements_missing: int, unresolved: int) -> str:
 
 def audit_student_credential(
     student_id: str,
+    catalog_year: str,
     credential_id: str,
     credential_requirements: pd.DataFrame,
-    completed_courses: set[str],
+    course_lookup: dict[str, dict],
     core_lookup: dict[str, set[str]],
 ) -> list[dict]:
     used_courses = set()
@@ -131,7 +186,7 @@ def audit_student_credential(
     ordered_groups = non_elective_groups + elective_groups
 
     for requirement_id, group in ordered_groups:
-        available_courses = completed_courses - used_courses
+        available_courses = set(course_lookup) - used_courses
 
         if set(group["option_type"]) <= {"ELECTIVE"}:
             status, matched = audit_elective_requirement(available_courses)
@@ -145,15 +200,37 @@ def audit_student_credential(
         if status == "MET":
             used_courses.update(matched)
 
+        latest_term_sort, latest_term_taken, matched_grades = latest_attempt_metadata(
+            matched=matched,
+            course_lookup=course_lookup,
+        )
+
+        matched_terms = "; ".join(
+            str(course_lookup[course_code]["term_taken"])
+            for course_code in matched
+            if course_code in course_lookup
+        )
+
+        matched_term_sorts = "; ".join(
+            str(course_lookup[course_code]["term_sort"])
+            for course_code in matched
+            if course_code in course_lookup
+        )
+
         detail_rows.append(
             {
                 "student_id": student_id,
-                "catalog_year": group.iloc[0].get("catalog_year", ""),
+                "catalog_year": catalog_year,
                 "credential_id": credential_id,
                 "requirement_id": requirement_id,
                 "rule_type": group.iloc[0]["rule_type"],
                 "status": status,
                 "matched_options": "; ".join(matched),
+                "matched_terms": matched_terms,
+                "matched_term_sorts": matched_term_sorts,
+                "matched_grades": matched_grades,
+                "latest_matched_term_sort": latest_term_sort,
+                "latest_matched_term_taken": latest_term_taken,
                 "required_options": "; ".join(
                     group["option_value"].dropna().astype(str).tolist()
                 ),
@@ -165,6 +242,32 @@ def audit_student_credential(
         )
 
     return detail_rows
+
+
+def summarize_award_term(group: pd.DataFrame, audit_status: str) -> tuple[str, str]:
+    if audit_status != "COMPLETE":
+        return "", ""
+
+    met = group[group["status"].eq("MET")].copy()
+    met["latest_matched_term_sort_numeric"] = pd.to_numeric(
+        met["latest_matched_term_sort"],
+        errors="coerce",
+    )
+    met = met[met["latest_matched_term_sort_numeric"].notna()].copy()
+
+    if met.empty:
+        return "", ""
+
+    latest_row = met.sort_values(
+        by="latest_matched_term_sort_numeric",
+        ascending=False,
+        kind="mergesort",
+    ).iloc[0]
+
+    return (
+        str(int(latest_row["latest_matched_term_sort_numeric"])),
+        str(latest_row["latest_matched_term_taken"]),
+    )
 
 
 def audit() -> None:
@@ -184,14 +287,11 @@ def audit() -> None:
             ]
         )
 
-    completed = courses[courses["grade"].isin(COMPLETION_GRADES)].copy()
-
     detail_rows = []
 
     for student_id in sorted(courses["student_id"].unique()):
-        student_completed = normalize_course_set(
-            completed[completed["student_id"] == student_id]
-        )
+        student_courses = courses[courses["student_id"] == student_id]
+        course_lookup = completed_course_lookup(student_courses)
 
         for (catalog_year, credential_id), credential_requirements in requirements.groupby(
             ["catalog_year", "credential_id"]
@@ -199,9 +299,10 @@ def audit() -> None:
             detail_rows.extend(
                 audit_student_credential(
                     student_id=student_id,
+                    catalog_year=catalog_year,
                     credential_id=credential_id,
                     credential_requirements=credential_requirements,
-                    completed_courses=student_completed,
+                    course_lookup=course_lookup,
                     core_lookup=core_lookup,
                 )
             )
@@ -218,6 +319,8 @@ def audit() -> None:
         met = (group["status"] == "MET").sum()
         unresolved = group["status"].astype(str).str.startswith("UNRESOLVED").sum()
         missing = total - met - unresolved
+        audit_status = get_audit_status(missing, unresolved)
+        award_term_sort, award_term_taken = summarize_award_term(group, audit_status)
 
         summary_rows.append(
             {
@@ -228,7 +331,9 @@ def audit() -> None:
                 "requirements_total": total,
                 "requirements_missing": missing,
                 "requirements_unresolved": unresolved,
-                "audit_status": get_audit_status(missing, unresolved),
+                "audit_status": audit_status,
+                "award_term_sort": award_term_sort,
+                "award_term_taken": award_term_taken,
             }
         )
 
