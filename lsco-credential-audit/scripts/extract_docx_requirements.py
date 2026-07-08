@@ -403,6 +403,15 @@ def _non_overlapping_marker_matches(text: str) -> list[re.Match]:
         if _is_parenthetical_annotation(text, match):
             continue
 
+        # Skip COMMUNICATION when it is course-title text, not a core bucket.
+        # Example:
+        #   SPCH 1321 Business & Professional Communication GOVT 2305 ...
+        if (
+            match.group().upper() == "COMMUNICATION"
+            and re.search(r"Business\s*&\s*Professional\s*$", text[:match.start()], re.I)
+        ):
+            continue
+
         if _is_plain_mathematics_course_title_match(text, match):
             continue
 
