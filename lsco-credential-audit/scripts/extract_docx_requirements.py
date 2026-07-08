@@ -1545,6 +1545,42 @@ def repair_ordinary_seaman_iii_merged_fourth_semester(
 
 
 
+def repair_court_reporting_second_semester_total(
+    totals: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Correct Court Reporting AAS 2022-2024 Second Semester source total.
+
+    The catalog table shows Second Semester Hours = 15, but only 11 hours of
+    visible requirements belong in Second Semester. CRTR 2401 remains in Third
+    Semester, and total program hours remains 60.
+    """
+
+    repaired = [dict(row) for row in totals]
+
+    target_ids = {
+        "COURT_REPORTING_AAS_2022",
+        "COURT_REPORTING_AAS_2023",
+        "COURT_REPORTING_AAS_2024",
+    }
+
+    for row in repaired:
+        if str(row.get("credential_id", "")) not in target_ids:
+            continue
+
+        if str(row.get("semester_label", "")) != "Second Semester":
+            continue
+
+        if str(row.get("semester_hours", "")) != "15":
+            continue
+
+        row["semester_hours"] = "11"
+        row["raw_total_text"] = str(row.get("raw_total_text", "")) + " [NORMALIZED_SOURCE_TOTAL_11]"
+        row["raw_hours_text"] = "11"
+
+    return repaired
+
+
+
 def repair_ordinary_seaman_iii_term_sequence(
     requirements: list[dict[str, str]],
     totals: list[dict[str, str]],
@@ -2363,6 +2399,7 @@ def extract_catalog(record) -> None:
     all_requirements, all_totals = repair_repeated_semester_total_labels(all_requirements, all_totals)
     all_requirements, all_totals = repair_ordinary_seaman_iii_term_sequence(all_requirements, all_totals)
     all_totals = repair_combined_semester_program_total_rows(all_totals)
+    all_totals = repair_court_reporting_second_semester_total(all_totals)
     all_totals = repair_compact_total_row_semester_hours(all_totals)
     all_requirements = synthesize_requirements_from_compact_total_rows(all_requirements, all_totals)
 

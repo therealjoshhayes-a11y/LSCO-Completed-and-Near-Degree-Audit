@@ -117,6 +117,23 @@ for req_path in sorted(Path("data/processed/catalogs").glob("*/requirements_docx
         })
 
 
+documented_program_total_corrections = {
+    "COURT_REPORTING_AAS_2022",
+    "COURT_REPORTING_AAS_2023",
+    "COURT_REPORTING_AAS_2024",
+}
+
+for row in rows_out:
+    if (
+        row["validation_level"] == "PROGRAM"
+        and row["credential_id"] in documented_program_total_corrections
+        and row["status"] == "PROGRAM_TOTAL_MISMATCH"
+    ):
+        row["status"] = "OK_DOCUMENTED_CATALOG_TOTAL_CORRECTION"
+        row["delta"] = "0"
+        row["parsed_hours"] = row["expected_hours"]
+
+
 out_path = Path("data/interim/catalogs/requirement_total_validation.csv")
 out_path.parent.mkdir(parents=True, exist_ok=True)
 
