@@ -1127,6 +1127,128 @@ def write_csv(path: Path, rows: list[dict[str, str]], fieldnames: list[str]) -> 
 
 
 
+
+def split_compressed_criminal_justice_stack_row(row: dict[str, str]) -> list[dict[str, str]] | None:
+    """Split compressed CJ course stacks with parenthetical/equivalent options.
+
+    Handles rows like:
+        CRIJ 1301 (or CJSA 1322) ... OR *CJCR 1374 ...
+        CRIJ 1306 (or CJSA 1313) ...
+    """
+
+    text = clean_text(row.get("raw_requirement_text", ""))
+    issue_flags = str(row.get("issue_flags", ""))
+
+    if "COMPRESSED_MULTI_COURSE_ROW" not in issue_flags:
+        return None
+
+    if not re.search(r"\b(?:CRIJ|CJSA|CJCR)\s+\d{4}\b", text):
+        return None
+
+    raw_hours_text = (
+        row.get("raw_credit_hours_text")
+        or row.get("raw_hours_text")
+        or row.get("credit_hours")
+        or ""
+    )
+    parsed_hours = parse_hours(str(raw_hours_text))
+
+    course_matches = list(COURSE_RE.finditer(text))
+    if len(course_matches) < 2:
+        return None
+
+    fragments: list[str] = []
+    for index, match in enumerate(course_matches):
+        start = match.start()
+        end = course_matches[index + 1].start() if index + 1 < len(course_matches) else len(text)
+        fragments.append(clean_text(text[start:end]))
+
+    grouped: list[str] = []
+    current = ""
+
+    for fragment in fragments:
+        if not current:
+            current = fragment
+            continue
+
+        should_continue = (
+            re.search(r"\(\s*or\s*\*?\s*$", current, re.I)
+            or re.search(r"\bOR\s+\*\s*$", current, re.I)
+            or re.search(r"\bAND\s+\*\s*$", current, re.I)
+        )
+
+        if should_continue:
+            current = clean_text(f"{current} {fragment}")
+        else:
+            grouped.append(current)
+            current = fragment
+
+    if current:
+        grouped.append(current)
+
+    if len(grouped) < 2:
+        return None
+
+    if len(parsed_hours) < len(grouped):
+        return None
+
+    hour_values = parsed_hours[:len(grouped)]
+
+    # Avoid taking semester/program totals as requirement hours.
+    if len(hour_values) != len(grouped):
+        return None
+
+    base_sequence_raw = row.get("requirement_sequence", 0)
+    try:
+        base_sequence = int(float(base_sequence_raw))
+    except (TypeError, ValueError):
+        base_sequence = 0
+
+    out: list[dict[str, str]] = []
+
+    for offset, fragment in enumerate(grouped):
+        new_row = dict(row)
+        new_row["requirement_sequence"] = f"{base_sequence}.{offset + 1}"
+        new_row["raw_requirement_text"] = fragment
+        new_row["credit_hours"] = str(hour_values[offset])
+        new_row["course_codes"] = ";".join(dict.fromkeys(COURSE_RE.findall(fragment)))
+
+        if (
+            re.search(r"\(\s*or\s*\*?\s*[A-Z]{3,4}\s+\d{4}\)", fragment, re.I)
+            or re.search(r"\bOR\s+\*", fragment, re.I)
+        ):
+            new_row["rule_type"] = "ANY_N"
+        elif re.search(r"\bAND\s+\*", fragment, re.I):
+            new_row["rule_type"] = "ANY_N"
+        else:
+            new_row["rule_type"] = parse_rule_type(fragment)
+
+        flags = [
+            flag for flag in str(new_row.get("issue_flags", "")).split(";")
+            if flag and flag.lower() != "nan"
+        ]
+        flags.append("SPLIT_COMPRESSED_CRIMINAL_JUSTICE_STACK")
+        new_row["issue_flags"] = ";".join(dict.fromkeys(flags))
+
+        out.append(new_row)
+
+    return out
+
+
+def repair_compressed_criminal_justice_stack_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    repaired: list[dict[str, str]] = []
+
+    for row in rows:
+        split_rows = split_compressed_criminal_justice_stack_row(row)
+        if split_rows:
+            repaired.extend(split_rows)
+        else:
+            repaired.append(row)
+
+    return repaired
+
+
+
 def repair_parenthetical_or_split_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     """Repair DOCX rows split across parenthetical OR course equivalents.
 
@@ -1339,6 +1461,7 @@ def extract_catalog(record) -> None:
                 row["credential_id"] = base_id
 
 
+    all_requirements = repair_compressed_criminal_justice_stack_rows(all_requirements)
     all_requirements = repair_parenthetical_or_split_rows(all_requirements)
 
     out_dir = Path("data") / "processed" / "catalogs" / record.catalog_year
