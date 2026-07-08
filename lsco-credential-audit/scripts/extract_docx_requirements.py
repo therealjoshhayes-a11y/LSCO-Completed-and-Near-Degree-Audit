@@ -28,6 +28,8 @@ SESSION_LABEL_RE = re.compile(
 
 def clean_text(value: str) -> str:
     text = " ".join((value or "").split())
+    text = re.sub(r"[.?]{2,}", " ", text)
+    text = " ".join(text.split())
 
     # DOCX exports sometimes collapse course spacing:
     #   ENGL1301 -> ENGL 1301
@@ -292,6 +294,236 @@ def normalize_requirement_hours(raw_hours_text: str, expected_count: int) -> lis
     return values
 
 
+
+
+CORE_ATOM_SYNONYMS = {
+    "COMMUNICATION": [
+        r"Communication(?:\s+CORE(?:\s+0?10)?)?",
+    ],
+    "MATHEMATICS": [
+        r"Mathematics(?:\s+CORE(?:\s+0?20)?)?",
+    ],
+    "LIFE_PHYSICAL_SCIENCE": [
+        r"Life\s+and\s+Physical\s+Sciences?(?:\s+CORE(?:\s+0?30)?)?",
+    ],
+    "LANGUAGE_PHILOSOPHY_CULTURE": [
+        r"Language,\s*Philosophy,\s*and\s+Culture(?:\s+CORE(?:\s+0?40)?)?",
+        r"Lang(?:uage)?[, ]+Phil(?:osophy)?(?:,?\s+and)?[, ]+Culture(?:\s+CORE(?:\s+0?40)?)?",
+        r"Language\s+and\s+Philosophy",
+    ],
+    "CREATIVE_ARTS": [
+        r"Creative\s+Arts(?:\s+CORE(?:\s+0?50)?)?(?:\s+Elective)?",
+    ],
+    "AMERICAN_HISTORY": [
+        r"American\s+History(?:\s+CORE\s+0?60)?",
+    ],
+    "GOVERNMENT_POLITICAL_SCIENCE": [
+        r"Government/Political\s+Science\s+CORE\s+0?70",
+    ],
+    "SOCIAL_BEHAVIORAL_SCIENCE": [
+        r"Social(?:/|\s+(?:and\s+)?)Behavioral\s+Sciences?(?:\s+(?:CORE|Elective))?",
+    ],
+    "COMPONENT_AREA_OPTION": [
+        r"Component\s+Area\s+Option(?:\s+CORE\s+0?90)?",
+    ],
+}
+
+CASCADE_CORE_ATOM_RE = re.compile(
+    r"\b(?:"
+    + "|".join(pattern for patterns in CORE_ATOM_SYNONYMS.values() for pattern in patterns)
+    + r")\b",
+    re.I,
+)
+
+CASCADE_RUBRIC_ELECTIVE_RE = re.compile(r"\b[A-Z]{2,6}\s+Elective\b", re.I)
+CASCADE_PROGRAM_AREA_ELECTIVE_RE = re.compile(
+    r"\b(?:Business|Animal\s+Science|Agribusiness)\s+Elective\b",
+    re.I,
+)
+CASCADE_GENERIC_ELECTIVE_RE = re.compile(r"\bElective\b", re.I)
+
+
+def canonical_core_atom(value: str) -> str:
+    value = clean_text(value)
+    for canonical, patterns in CORE_ATOM_SYNONYMS.items():
+        for pattern in patterns:
+            if re.fullmatch(pattern, value, re.I):
+                return canonical
+    return slugify(value)
+
+
+def cascade_atom_matches(text: str) -> list[tuple[int, int, str, str]]:
+    matches: list[tuple[int, int, str, str]] = []
+
+    for match in COURSE_RE.finditer(text):
+        matches.append((match.start(), match.end(), "COURSE", match.group()))
+
+    for match in CASCADE_CORE_ATOM_RE.finditer(text):
+        matches.append((match.start(), match.end(), "CORE_BUCKET", match.group()))
+
+    for match in CASCADE_RUBRIC_ELECTIVE_RE.finditer(text):
+        matches.append((match.start(), match.end(), "RUBRIC_ELECTIVE", match.group()))
+
+    for match in CASCADE_PROGRAM_AREA_ELECTIVE_RE.finditer(text):
+        matches.append((match.start(), match.end(), "PROGRAM_AREA_ELECTIVE", match.group()))
+
+    kept: list[tuple[int, int, str, str]] = []
+    for item in sorted(matches, key=lambda x: (x[0], -(x[1] - x[0]))):
+        start, end, kind, value = item
+        if any(start >= kept_start and end <= kept_end for kept_start, kept_end, _, _ in kept):
+            continue
+        kept.append(item)
+
+    return sorted(kept, key=lambda x: x[0])
+
+
+def cascade_classify_expression(fragment: str) -> tuple[str, str]:
+    fragment = clean_text(fragment)
+    course_codes = ";".join(dict.fromkeys(COURSE_RE.findall(fragment)))
+
+    if re.search(r"\bOR\b", fragment, re.I):
+        return "ANY_N", course_codes
+
+    if course_codes:
+        return "EXACT", course_codes
+
+    if CASCADE_CORE_ATOM_RE.search(fragment):
+        return "CORE_BUCKET", ""
+
+    if CASCADE_RUBRIC_ELECTIVE_RE.search(fragment):
+        return "RUBRIC_ELECTIVE", ""
+
+    if CASCADE_PROGRAM_AREA_ELECTIVE_RE.search(fragment):
+        return "PROGRAM_AREA_ELECTIVE", ""
+
+    if CASCADE_GENERIC_ELECTIVE_RE.search(fragment):
+        return "ELECTIVE", ""
+
+    return "UNRESOLVED", course_codes
+
+
+def try_cascade_mixed_option_split(row: dict) -> list[dict] | None:
+    raw_text = row.get("raw_requirement_text", "")
+    text = clean_text(raw_text)
+
+    issue_flags = str(row.get("issue_flags", ""))
+    raw_hours_text = (
+        row.get("raw_credit_hours_text")
+        or row.get("raw_hours_text")
+        or row.get("credit_hours")
+        or ""
+    )
+    hour_count = len(parse_hours(str(raw_hours_text)))
+
+    has_structural_evidence = (
+        "COMPRESSED_MULTI_COURSE_ROW" in issue_flags
+        or "MULTIPLE_CREDIT_HOUR_VALUES" in issue_flags
+        or hour_count > 1
+    )
+
+    has_mixed_option_language = re.search(
+        r"\bOR\b|\bElective\b|CORE|Social|Creative|Language|Communication|Mathematics",
+        text,
+        re.I,
+    )
+
+    if not (has_structural_evidence and has_mixed_option_language):
+        return None
+
+    atoms = cascade_atom_matches(text)
+    if len(atoms) < 2:
+        return None
+
+    fragments: list[str] = []
+    for index, (start, end, kind, value) in enumerate(atoms):
+        next_start = atoms[index + 1][0] if index + 1 < len(atoms) else len(text)
+        fragments.append(clean_text(text[start:next_start]))
+
+    grouped: list[str] = []
+    index = 0
+
+    while index < len(fragments):
+        current = fragments[index]
+
+        while (
+            index + 1 < len(fragments)
+            and (
+                re.search(r"\bOR\s*$", current, re.I)
+                or re.search(r"\bor\s+[A-Z]{2,6}\s*$", current, re.I)
+                or re.search(r"\bor\s*$", current, re.I)
+            )
+        ):
+            current = clean_text(f"{current} {fragments[index + 1]}")
+            index += 1
+
+        grouped.append(current)
+        index += 1
+
+    # Second pass: join non-course phrase + trailing bare/generic elective fragment.
+    repaired: list[str] = []
+    index = 0
+    while index < len(grouped):
+        current = grouped[index]
+        if (
+            index + 1 < len(grouped)
+            and re.fullmatch(r"Elective(?:\s+OR)?", grouped[index + 1], re.I)
+            and (
+                CASCADE_CORE_ATOM_RE.search(current)
+                or re.search(r"\bor\s+[A-Z]{2,6}\s*$", current, re.I)
+            )
+        ):
+            combined = clean_text(f"{current} {grouped[index + 1]}")
+            index += 2
+
+            while index < len(grouped) and re.search(r"\bOR\s*$", combined, re.I):
+                combined = clean_text(f"{combined} {grouped[index]}")
+                index += 1
+
+            repaired.append(combined)
+        else:
+            repaired.append(current)
+            index += 1
+
+    raw_hours_text = (
+        row.get("raw_credit_hours_text")
+        or row.get("raw_hours_text")
+        or row.get("credit_hours")
+        or ""
+    )
+    hour_values = normalize_requirement_hours(raw_hours_text, len(repaired))
+
+    if len(repaired) < 2 or len(hour_values) != len(repaired):
+        return None
+
+    base_sequence_raw = row.get("requirement_sequence", 0)
+    try:
+        base_sequence = int(float(base_sequence_raw))
+    except (TypeError, ValueError):
+        base_sequence = 0
+
+    out: list[dict] = []
+    for offset, fragment in enumerate(repaired):
+        new_row = dict(row)
+        rule_type, course_codes = cascade_classify_expression(fragment)
+
+        new_row["requirement_sequence"] = base_sequence + offset
+        new_row["raw_requirement_text"] = fragment
+        new_row["credit_hours"] = hour_values[offset]
+        new_row["rule_type"] = rule_type
+        new_row["course_codes"] = course_codes
+
+        if "issue_flags" in new_row:
+            flags = [
+                flag for flag in str(new_row.get("issue_flags", "")).split(";")
+                if flag and flag not in {"COMPRESSED_MULTI_COURSE_ROW", "MULTIPLE_CREDIT_HOUR_VALUES"}
+            ]
+            flags.append("CASCADE_MIXED_OPTION_SPLIT")
+            new_row["issue_flags"] = ";".join(dict.fromkeys(flags))
+
+        out.append(new_row)
+
+    return out
+
 MIXED_NON_COURSE_MARKER_RE = re.compile(
     r"\b(?:"
     r"Lang(?:uage)?[, ]+Phil(?:osophy)?(?:,?\s+and)?[, ]+Culture(?:\s+CORE(?:\s+0?40)?)?\s+OR\s+Creative\s+Arts(?:\s+CORE(?:\s+0?50)?)?"
@@ -303,7 +535,7 @@ MIXED_NON_COURSE_MARKER_RE = re.compile(
     r"|Life\s+and\s+Physical\s+Sciences?(?:\s+CORE\s+0?30)?"
     r"|Mathematics(?:\s+CORE(?:\s+0?20)?)?"
     r"|Creative\s+Arts(?:\s+CORE(?:\s+0?50)?)?"
-    r"|Social\s+(?:and\s+)?Behavioral\s+Sciences?(?:\s+CORE)?"
+    r"|Social(?:/|\s+(?:and\s+)?)Behavioral\s+Sciences?(?:\s+CORE|\s+Elective)?"
     r"|Component\s+Area\s+Option(?:\s+CORE\s+0?90)?"
     r"|BUSI\s+Elective"
     r"|Business\s+Elective"
@@ -507,7 +739,7 @@ def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, 
             grouped_fragments.append(combined_fragment)
         elif (
             index + 1 < len(fragments)
-            and re.fullmatch(r"Elective", fragments[index + 1], re.I)
+            and re.fullmatch(r"Elective(?:\\s+OR)?", fragments[index + 1], re.I)
             and (
                 "CREATIVE ARTS" in fragment.upper()
                 or "LANGUAGE, PHILOSOPHY" in fragment.upper()
@@ -518,8 +750,21 @@ def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, 
             # Group non-course OR elective options:
             #   LANGUAGE ... or CREATIVE ARTS
             #   EDUC 1300 Learning Framework or EMSP Elective
-            grouped_fragments.append(clean_text(f"{fragment} {fragments[index + 1]}"))
+            #   COSC 1301 ... OR SPCH Elective OR EDUC 1301 ...
+            combined_fragment = clean_text(f"{fragment} {fragments[index + 1]}")
             index += 2
+
+            while (
+                index < len(fragments)
+                and (
+                    re.search(r"\bOR\s*$", combined_fragment, re.I)
+                    or re.search(r"\(?\s*OR(?:\s+CORE)?\s*$", combined_fragment, re.I)
+                )
+            ):
+                combined_fragment = clean_text(f"{combined_fragment} {fragments[index]}")
+                index += 1
+
+            grouped_fragments.append(combined_fragment)
         else:
             grouped_fragments.append(fragment)
             index += 1
@@ -541,6 +786,9 @@ def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, 
 
             hour_values = inferred_hours
         else:
+            cascade_rows = try_cascade_mixed_option_split(row)
+            if cascade_rows:
+                return cascade_rows
             return [row]
 
     split_rows = []
