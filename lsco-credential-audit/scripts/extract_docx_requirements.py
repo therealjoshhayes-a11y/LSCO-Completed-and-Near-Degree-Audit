@@ -500,8 +500,12 @@ def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, 
                 "CREATIVE ARTS" in fragment.upper()
                 or "LANGUAGE, PHILOSOPHY" in fragment.upper()
                 or "LANG, PHIL" in fragment.upper()
+                or re.search(r"\bor\s+[A-Z]{2,6}\s*$", fragment, re.I)
             )
         ):
+            # Group non-course OR elective options:
+            #   LANGUAGE ... or CREATIVE ARTS
+            #   EDUC 1300 Learning Framework or EMSP Elective
             grouped_fragments.append(clean_text(f"{fragment} {fragments[index + 1]}"))
             index += 2
         else:
