@@ -1421,6 +1421,7 @@ def repair_adjacent_elective_option_rows(rows: list[dict[str, str]]) -> list[dic
             and re.fullmatch(r"elective", next_text, re.I)
             and (
                 re.search(r"\bor\s+approved\s*$", current_text, re.I)
+                or re.search(r"\bor\s+academic\s*$", current_text, re.I)
                 or re.search(r"\bOR\s+\*[A-Z]{3,4}(?:/[A-Z]{3,4})+\s*$", current_text, re.I)
             )
         )
