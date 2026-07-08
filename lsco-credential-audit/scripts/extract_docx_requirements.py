@@ -1688,6 +1688,12 @@ def remove_massage_therapy_contact_hours_requirement(
         ):
             continue
 
+        if (
+            credential_id == "CISCO_NETWORKING_CYBERSECURITY_TECHNICIAN_2021"
+            and raw_text == "Program Total Hours"
+        ):
+            continue
+
         repaired.append(dict(row))
 
     return repaired
