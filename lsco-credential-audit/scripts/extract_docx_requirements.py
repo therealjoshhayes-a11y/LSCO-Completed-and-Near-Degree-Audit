@@ -294,14 +294,14 @@ def normalize_requirement_hours(raw_hours_text: str, expected_count: int) -> lis
 
 MIXED_NON_COURSE_MARKER_RE = re.compile(
     r"\b(?:"
-    r"Lang(?:uage)?[, ]+Phil(?:osophy)?[, ]+Culture\s+OR\s+Creative Arts"
-    r"|Language,\s*Philosophy,\s*and\s+Culture(?:\s+CORE\s+0?40)?"
+    r"Lang(?:uage)?[, ]+Phil(?:osophy)?(?:,?\s+and)?[, ]+Culture(?:\s+CORE(?:\s+0?40)?)?\s+OR\s+Creative\s+Arts(?:\s+CORE(?:\s+0?50)?)?"
+    r"|Language,\s*Philosophy,\s*and\s+Culture(?:\s+CORE(?:\s+0?40)?)?"
     r"|American\s+History\s+CORE\s+0?60"
     r"|Communication(?:\s+CORE\s+0?10)?"
     r"|Government/Political\s+Science\s+CORE\s+0?70"
     r"|Life\s+and\s+Physical\s+Sciences?(?:\s+CORE\s+0?30)?"
-    r"|Mathematics(?:\s+CORE\s+0?20)?"
-    r"|Creative\s+Arts(?:\s+CORE\s+0?50)?"
+    r"|Mathematics(?:\s+CORE(?:\s+0?20)?)?"
+    r"|Creative\s+Arts(?:\s+CORE(?:\s+0?50)?)?"
     r"|Social\s+(?:and\s+)?Behavioral\s+Science(?:\s+CORE)?"
     r"|Component\s+Area\s+Option(?:\s+CORE\s+0?90)?"
     r"|BUSI\s+Elective"
@@ -331,6 +331,40 @@ def _is_parenthetical_annotation(text: str, match: re.Match) -> bool:
     return next_close != -1
 
 
+def _is_plain_mathematics_course_title_match(text: str, match: re.Match) -> bool:
+    """Skip plain 'Mathematics' when it is part of a course title.
+
+    Example:
+        MATH 1332 Contemporary Mathematics ... OR CORE MATHEMATICS
+
+    The first Mathematics is title text. The second is a core bucket.
+    """
+    if match.group().upper() != "MATHEMATICS":
+        return False
+
+    preceding_text = text[:match.start()]
+    following_text = text[match.end():]
+
+    nearest_course = list(COURSE_RE.finditer(preceding_text))
+    if not nearest_course:
+        return False
+
+    last_course = nearest_course[-1]
+
+    # If another explicit OR appears before the marker, it is likely a core bucket.
+    text_after_course = preceding_text[last_course.end():]
+    if re.search(r"\bOR\s+(?:CORE\s+)?$", text_after_course, re.I):
+        return False
+
+    # If it is followed by another course before an OR, treat it as a standalone marker.
+    next_or = re.search(r"\bOR\b", following_text, re.I)
+    next_course = COURSE_RE.search(following_text)
+    if next_course and (not next_or or next_course.start() < next_or.start()):
+        return False
+
+    return True
+
+
 def _non_overlapping_marker_matches(text: str) -> list[re.Match]:
     matches = sorted(MIXED_NON_COURSE_MARKER_RE.finditer(text), key=lambda m: (m.start(), -(m.end() - m.start())))
     kept = []
@@ -338,6 +372,9 @@ def _non_overlapping_marker_matches(text: str) -> list[re.Match]:
 
     for match in matches:
         if _is_parenthetical_annotation(text, match):
+            continue
+
+        if _is_plain_mathematics_course_title_match(text, match):
             continue
 
         if match.start() < last_end:
@@ -395,7 +432,7 @@ def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, 
     while index < len(fragments):
         fragment = fragments[index]
 
-        if index + 1 < len(fragments) and re.search(r"\(?\s*OR\s*$", fragment, re.I):
+        if index + 1 < len(fragments) and re.search(r"\(?\s*OR(?:\s+CORE)?\s*$", fragment, re.I):
             grouped_fragments.append(clean_text(f"{fragment} {fragments[index + 1]}"))
             index += 2
         elif (
@@ -471,7 +508,7 @@ def split_internal_or_compressed_course_row(row: dict[str, str]) -> list[dict[st
     while index < len(parts):
         part = parts[index]
 
-        if index + 1 < len(parts) and re.search(r"\(?\s*OR\s*$", part, re.I):
+        if index + 1 < len(parts) and re.search(r"\(?\s*OR(?:\s+CORE)?\s*$", part, re.I):
             grouped_parts.append(clean_text(f"{part} {parts[index + 1]}"))
             index += 2
         else:
@@ -761,6 +798,75 @@ def extract_catalog(record) -> None:
                 all_totals.extend(totals)
 
             table_index += 1
+
+    # Disambiguate duplicate credential titles within the same catalog year.
+    #
+    # Example confirmed from the 2025-2026 catalog:
+    #   Graphic Design Certificate of Completion, 24 SCH
+    #   Graphic Design Associate of Applied Science, 60 SCH
+    #
+    # The DOCX heading/table extraction gives both the same title base
+    # ("Graphic Design"), so title-only credential IDs collide. For duplicate
+    # titles, infer an award suffix from the table's Total Program Hours.
+    table_total_hours: dict[str, int] = {}
+    for row in all_totals:
+        total = row.get("total_program_hours", "")
+        if total:
+            try:
+                table_total_hours[row["source_table_index"]] = int(float(total))
+            except ValueError:
+                pass
+
+    title_counts: dict[str, int] = {}
+    for row in table_map_rows:
+        title_counts[row["credential_title"]] = title_counts.get(row["credential_title"], 0) + 1
+
+    duplicate_titles = {title for title, count in title_counts.items() if count > 1}
+
+    if duplicate_titles:
+        table_suffixes: dict[str, str] = {}
+
+        for row in table_map_rows:
+            if row["credential_title"] not in duplicate_titles:
+                continue
+
+            table_index_value = row["source_table_index"]
+            total_hours = table_total_hours.get(table_index_value)
+
+            if total_hours is None:
+                suffix = f'T{int(table_index_value):03d}'
+            elif total_hours >= 60:
+                suffix = "AAS"
+            else:
+                suffix = "CERTIFICATE_OF_COMPLETION"
+
+            table_suffixes[table_index_value] = suffix
+
+        # If a duplicate title has multiple tables with the same inferred suffix,
+        # preserve uniqueness by falling back to source-table suffixes for that title.
+        title_suffix_counts: dict[tuple[str, str], int] = {}
+        for row in table_map_rows:
+            if row["credential_title"] not in duplicate_titles:
+                continue
+
+            suffix = table_suffixes.get(row["source_table_index"], f'T{int(row["source_table_index"]):03d}')
+            key = (row["credential_title"], suffix)
+            title_suffix_counts[key] = title_suffix_counts.get(key, 0) + 1
+
+        for row_group in (all_requirements, all_totals, table_map_rows):
+            for row in row_group:
+                if row["credential_title"] not in duplicate_titles:
+                    continue
+
+                table_index_value = row["source_table_index"]
+                suffix = table_suffixes.get(table_index_value, f'T{int(table_index_value):03d}')
+
+                if title_suffix_counts.get((row["credential_title"], suffix), 0) > 1:
+                    suffix = f'T{int(table_index_value):03d}'
+
+                base_id = f'{slugify(row["credential_title"])}_{suffix}_{record.catalog_year[:4]}'
+                row["credential_id"] = base_id
+
 
     out_dir = Path("data") / "processed" / "catalogs" / record.catalog_year
 
