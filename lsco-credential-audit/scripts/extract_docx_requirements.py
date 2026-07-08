@@ -296,7 +296,7 @@ MIXED_NON_COURSE_MARKER_RE = re.compile(
     r"\b(?:"
     r"Lang(?:uage)?[, ]+Phil(?:osophy)?(?:,?\s+and)?[, ]+Culture(?:\s+CORE(?:\s+0?40)?)?\s+OR\s+Creative\s+Arts(?:\s+CORE(?:\s+0?50)?)?"
     r"|Language,\s*Philosophy,\s*and\s+Culture(?:\s+CORE(?:\s+0?40)?)?"
-    r"|American\s+History\s+CORE\s+0?60"
+    r"|American\s+History(?:\s+CORE\s+0?60)?"
     r"|Communication(?:\s+CORE\s+0?10)?"
     r"|Government/Political\s+Science\s+CORE\s+0?70"
     r"|Life\s+and\s+Physical\s+Sciences?(?:\s+CORE\s+0?30)?"
@@ -332,14 +332,16 @@ def _is_parenthetical_annotation(text: str, match: re.Match) -> bool:
 
 
 def _is_plain_mathematics_course_title_match(text: str, match: re.Match) -> bool:
-    """Skip plain 'Mathematics' when it is part of a course title.
+    """Skip plain core words when they are part of a course title.
 
-    Example:
+    Examples:
         MATH 1332 Contemporary Mathematics ... OR CORE MATHEMATICS
+        COMM 1307 Introduction to Mass Communication
 
-    The first Mathematics is title text. The second is a core bucket.
+    The title-word occurrence should be ignored. The standalone/core-bucket
+    occurrence should be kept.
     """
-    if match.group().upper() != "MATHEMATICS":
+    if match.group().upper() not in {"MATHEMATICS", "COMMUNICATION"}:
         return False
 
     preceding_text = text[:match.start()]
@@ -354,6 +356,16 @@ def _is_plain_mathematics_course_title_match(text: str, match: re.Match) -> bool
     # If another explicit OR appears before the marker, it is likely a core bucket.
     text_after_course = preceding_text[last_course.end():]
     if re.search(r"\bOR\s+(?:CORE\s+)?$", text_after_course, re.I):
+        return False
+
+    # High-confidence standalone bucket sequence:
+    #   ENGL 1301 Composition I AMERICAN HISTORY MATHEMATICS CREATIVE ARTS
+    text_after_course = preceding_text[last_course.end():]
+    if (
+        match.group().upper() == "MATHEMATICS"
+        and "AMERICAN HISTORY" in text_after_course.upper()
+        and re.search(r"^\s+CREATIVE\s+ARTS\b", following_text, re.I)
+    ):
         return False
 
     # If it is followed by another course before an OR, treat it as a standalone marker.
@@ -451,7 +463,23 @@ def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, 
             index += 1
 
     if len(grouped_fragments) != len(hour_values):
-        return [row]
+        # Second-pass residue case:
+        #   ENGL 1301 Composition I AMERICAN HISTORY MATHEMATICS CREATIVE ARTS
+        #   GOVT 2306 Texas Government LIFE AND PHYSICAL SCIENCES
+        if len(course_matches) == 1 and len(grouped_fragments) > 1:
+            base_hour = int(float(row.get("credit_hours", "3") or 3))
+            inferred_hours = [base_hour]
+
+            for fragment in grouped_fragments[1:]:
+                upper_fragment = fragment.upper()
+                if "LIFE AND PHYSICAL SCIENCES" in upper_fragment:
+                    inferred_hours.append(4)
+                else:
+                    inferred_hours.append(3)
+
+            hour_values = inferred_hours
+        else:
+            return [row]
 
     split_rows = []
 
@@ -658,7 +686,23 @@ def split_compressed_course_row(row: dict[str, str]) -> list[dict[str, str]]:
         new_row["issue_flags"] = ""
         split_rows.append(new_row)
 
-    return split_rows
+    # Some DOCX rows first split cleanly by course code but leave a
+    # standalone core bucket attached to one emitted course row:
+    #   GOVT 2306 Texas Government LIFE AND PHYSICAL SCIENCES
+    # Give the mixed course/core splitter one final cleanup pass.
+    final_rows = []
+    for split_row in split_rows:
+        final_rows.extend(split_mixed_course_core_elective_row(split_row))
+
+    # If that cleanup created more rows, realign credits from the original
+    # raw hour stream instead of keeping stale pre-cleanup course hours.
+    if len(final_rows) != len(split_rows):
+        final_hour_values = normalize_requirement_hours(raw_hours_text, len(final_rows))
+        if len(final_hour_values) == len(final_rows):
+            for idx, final_row in enumerate(final_rows):
+                final_row["credit_hours"] = str(final_hour_values[idx])
+
+    return final_rows
 
 def parse_plan_table(
     *,
