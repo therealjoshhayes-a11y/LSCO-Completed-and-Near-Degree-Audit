@@ -368,6 +368,22 @@ def _is_plain_mathematics_course_title_match(text: str, match: re.Match) -> bool
     ):
         return False
 
+    # High-confidence non-course OR pair:
+    #   COMMUNICATION or COMPONENT AREA OPTION
+    if (
+        match.group().upper() == "COMMUNICATION"
+        and re.search(r"^\s+or\s+COMPONENT\s+AREA\s+OPTION\b", following_text, re.I)
+    ):
+        return False
+
+    # High-confidence standalone bucket after a language/creative-arts pair:
+    #   LANGUAGE, PHILOSOPHY, AND CULTURE or CREATIVE ARTS MATHEMATICS
+    if (
+        match.group().upper() == "MATHEMATICS"
+        and re.search(r"LANGUAGE,\s*PHILOSOPHY,\s*(?:AND\s+)?CULTURE\s+or\s+CREATIVE\s+ARTS\s*$", preceding_text, re.I)
+    ):
+        return False
+
     # If it is followed by another course before an OR, treat it as a standalone marker.
     next_or = re.search(r"\bOR\b", following_text, re.I)
     next_course = COURSE_RE.search(following_text)
@@ -444,7 +460,7 @@ def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, 
     while index < len(fragments):
         fragment = fragments[index]
 
-        if index + 1 < len(fragments) and re.search(r"\(?\s*OR(?:\s+CORE)?\s*$", fragment, re.I):
+        if index + 1 < len(fragments) and re.search(r"\(?\s*OR(?:\s+CORE)?\s*$", fragment, re.I) or re.search(r"\bOR\s*$", fragment, re.I):
             grouped_fragments.append(clean_text(f"{fragment} {fragments[index + 1]}"))
             index += 2
         elif (
@@ -536,7 +552,7 @@ def split_internal_or_compressed_course_row(row: dict[str, str]) -> list[dict[st
     while index < len(parts):
         part = parts[index]
 
-        if index + 1 < len(parts) and re.search(r"\(?\s*OR(?:\s+CORE)?\s*$", part, re.I):
+        if index + 1 < len(parts) and re.search(r"\(?\s*OR(?:\s+CORE)?\s*$", part, re.I) or re.search(r"\bOR\s*$", part, re.I):
             grouped_parts.append(clean_text(f"{part} {parts[index + 1]}"))
             index += 2
         else:
