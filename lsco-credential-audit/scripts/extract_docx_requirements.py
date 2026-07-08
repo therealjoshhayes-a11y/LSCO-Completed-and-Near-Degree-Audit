@@ -1661,6 +1661,35 @@ def repair_communication_2022_fourth_semester_electives(
 
 
 
+def remove_massage_therapy_contact_hours_requirement(
+    requirements: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Remove Massage Therapy contact-hour metadata parsed as a requirement.
+
+    Source row:
+        Total Program Contact Hours | 29
+
+    This is program contact-hour metadata, not an SCH requirement row.
+    """
+
+    repaired = []
+
+    for row in requirements:
+        credential_id = str(row.get("credential_id", ""))
+        raw_text = clean_text(str(row.get("raw_requirement_text", "")))
+
+        if (
+            credential_id in {"MASSAGE_THERAPY_2024", "MASSAGE_THERAPY_2025"}
+            and raw_text == "Total Program Contact Hours"
+        ):
+            continue
+
+        repaired.append(dict(row))
+
+    return repaired
+
+
+
 def repair_business_construction_first_semester_total(
     totals: list[dict[str, str]],
 ) -> list[dict[str, str]]:
@@ -2545,6 +2574,7 @@ def extract_catalog(record) -> None:
     all_requirements, all_totals = repair_ordinary_seaman_iii_term_sequence(all_requirements, all_totals)
     all_requirements = repair_communication_2022_fourth_semester_electives(all_requirements, all_totals)
     all_requirements = repair_business_real_estate_blank_busi_2304_hours(all_requirements)
+    all_requirements = remove_massage_therapy_contact_hours_requirement(all_requirements)
     all_totals = repair_combined_semester_program_total_rows(all_totals)
     all_totals = repair_court_reporting_second_semester_total(all_totals)
     all_totals = repair_business_construction_first_semester_total(all_totals)
