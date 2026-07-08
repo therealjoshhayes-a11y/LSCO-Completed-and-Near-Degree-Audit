@@ -1059,7 +1059,7 @@ def parse_plan_table(
             semester_label = first_cell
             continue
 
-        if SEMESTER_RE.match(first_cell) or re.fullmatch(r"Summer\s+Session", first_cell, re.I):
+        if SEMESTER_RE.match(first_cell) or SESSION_LABEL_RE.match(first_cell):
             semester_label = first_cell
             continue
 
