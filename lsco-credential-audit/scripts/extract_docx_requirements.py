@@ -403,6 +403,18 @@ def _non_overlapping_marker_matches(text: str) -> list[re.Match]:
         if _is_parenthetical_annotation(text, match):
             continue
 
+        # In elective lists, only keep the first elective marker.
+        # Example:
+        #   Business Elective, Animal Science Elective, or Agribusiness Elective
+        # The whole phrase is one requirement option group, not three requirements.
+        if (
+            match.group().upper() == "ELECTIVE"
+            and kept
+            and "ELECTIVE" in kept[-1].group().upper()
+            and re.fullmatch(r"[\s,orA-Za-z]*", text[kept[-1].end():match.start()], re.I)
+        ):
+            continue
+
         # Skip COMMUNICATION when it is course-title text, not a core bucket.
         # Example:
         #   SPCH 1321 Business & Professional Communication GOVT 2305 ...
