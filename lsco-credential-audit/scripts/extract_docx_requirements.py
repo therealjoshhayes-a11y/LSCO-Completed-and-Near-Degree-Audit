@@ -1545,6 +1545,35 @@ def repair_ordinary_seaman_iii_merged_fourth_semester(
 
 
 
+def repair_business_real_estate_blank_busi_2304_hours(
+    requirements: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Repair known blank credit-hours cell for BUSI 2304 in 2021 Real Estate Management."""
+
+    repaired = [dict(row) for row in requirements]
+
+    for row in repaired:
+        if str(row.get("credential_id", "")) != "BUSINESS_REAL_ESTATE_MANAGEMENT_2021":
+            continue
+
+        if str(row.get("course_codes", "")) != "BUSI 2304":
+            continue
+
+        row["credit_hours"] = "3"
+        row["raw_credit_hours_text"] = "3"
+        existing_flags = str(row.get("issue_flags", "") or "").strip()
+        repair_flag = "REPAIRED_BLANK_CREDIT_HOURS_BUSI_2304"
+
+        if not existing_flags or existing_flags.lower() == "nan":
+            row["issue_flags"] = repair_flag
+        elif repair_flag not in existing_flags.split(";"):
+            row["issue_flags"] = existing_flags + ";" + repair_flag
+
+    return repaired
+
+
+
+
 def repair_communication_2022_fourth_semester_electives(
     requirements: list[dict[str, str]],
     totals: list[dict[str, str]],
@@ -2486,6 +2515,7 @@ def extract_catalog(record) -> None:
     all_requirements, all_totals = repair_repeated_semester_total_labels(all_requirements, all_totals)
     all_requirements, all_totals = repair_ordinary_seaman_iii_term_sequence(all_requirements, all_totals)
     all_requirements = repair_communication_2022_fourth_semester_electives(all_requirements, all_totals)
+    all_requirements = repair_business_real_estate_blank_busi_2304_hours(all_requirements)
     all_totals = repair_combined_semester_program_total_rows(all_totals)
     all_totals = repair_court_reporting_second_semester_total(all_totals)
     all_totals = repair_compact_total_row_semester_hours(all_totals)
