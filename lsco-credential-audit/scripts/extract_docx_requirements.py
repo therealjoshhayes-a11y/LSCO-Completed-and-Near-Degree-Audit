@@ -96,6 +96,9 @@ def parse_rule_type(text: str) -> str:
     if "AMERICAN HISTORY CORE" in upper:
         return "CORE_BUCKET"
 
+    if upper.strip() == "AMERICAN HISTORY":
+        return "CORE_BUCKET"
+
     if "COMMUNICATION CORE" in upper:
         return "CORE_BUCKET"
 
