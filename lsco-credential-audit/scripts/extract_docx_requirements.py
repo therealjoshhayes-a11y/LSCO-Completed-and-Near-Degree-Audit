@@ -1558,20 +1558,14 @@ def repair_ordinary_seaman_iii_term_sequence(
         Third Semester
         Fourth Semester
 
-    Some DOCX exports collapse the Fourth Semester NAUT 2265 row into the
-    final totals row:
-        NAUT 2265 ...
-        Semester Hours
-        Total Program Hours
-        2
-        2
-        42
+    Later DOCX exports sometimes merge Summer Session NAUT 1264 into the
+    Second Semester row and Fourth Semester NAUT 2265 into the Third Semester
+    total/program row.
     """
 
     repaired_requirements = [dict(row) for row in requirements]
     repaired_totals = [dict(row) for row in totals]
 
-    # Correct term labels for known Ordinary Seaman III practicum courses.
     for row in repaired_requirements:
         credential_id = str(row.get("credential_id", ""))
         if not credential_id.startswith("ORDINARY_SEAMAN_III_"):
@@ -1586,7 +1580,18 @@ def repair_ordinary_seaman_iii_term_sequence(
         if "NAUT 2265" in codes or "NAUT 2265" in text:
             row["semester_label"] = "Fourth Semester"
 
-    existing = {
+    existing_total_keys = {
+        (
+            str(row.get("catalog_year", "")),
+            str(row.get("credential_id", "")),
+            str(row.get("semester_label", "")),
+            str(row.get("source_table_index", "")),
+            str(row.get("source_row_index", "")),
+        )
+        for row in repaired_totals
+    }
+
+    existing_req_keys = {
         (
             str(row.get("catalog_year", "")),
             str(row.get("credential_id", "")),
@@ -1596,56 +1601,97 @@ def repair_ordinary_seaman_iii_term_sequence(
         for row in repaired_requirements
     }
 
-    for total in repaired_totals:
+    for total in list(repaired_totals):
         credential_id = str(total.get("credential_id", ""))
         if not credential_id.startswith("ORDINARY_SEAMAN_III_"):
             continue
 
-        if str(total.get("semester_label", "")) != "Fourth Semester":
-            continue
-
+        catalog_year = str(total.get("catalog_year", ""))
         raw_total_text = clean_text(str(total.get("raw_total_text", "")))
         hours = parse_hours(str(total.get("raw_hours_text", "")))
+        table_index = str(total.get("source_table_index", ""))
+        row_index = str(total.get("source_row_index", ""))
 
-        if raw_total_text != "Total Program Hours":
-            continue
+        # Shape in 2024-2025 and 2025-2026:
+        #   NAUT 1264 + second-semester courses + Semester Hours | 2 3 2 3 3 13
+        if (
+            "NAUT 1264" in raw_total_text
+            and "Semester Hours" in raw_total_text
+            and hours == [2, 3, 2, 3, 3, 13]
+        ):
+            total["semester_label"] = "Second Semester"
+            total["semester_hours"] = "11"
 
-        if hours != [2, 2, 42]:
-            continue
+            summer_key = (catalog_year, credential_id, "Summer Session", table_index, f"{row_index}.summer")
+            if summer_key not in existing_total_keys:
+                new_total = dict(total)
+                new_total["source_row_index"] = f"{row_index}.summer"
+                new_total["semester_label"] = "Summer Session"
+                new_total["raw_total_text"] = "NAUT 1264 Practicum Marine Science/Marine Merchant Officer Semester Hours"
+                new_total["semester_hours"] = "2"
+                new_total["total_program_hours"] = ""
+                new_total["raw_hours_text"] = "2 2"
+                repaired_totals.append(new_total)
+                existing_total_keys.add(summer_key)
 
-        # The visual source is a merged requirement + semester total + program total.
-        total["raw_total_text"] = "Semester Hours Total Program Hours"
-        total["semester_hours"] = "2"
-        total["total_program_hours"] = "42"
+        # Shape in 2024-2025 and 2025-2026:
+        #   NAUT 2265 + third-semester courses + Semester Hours Total Program Hours | 2 3 3 3 3 14 42
+        if (
+            "NAUT 2265" in raw_total_text
+            and "Semester Hours" in raw_total_text
+            and "Total Program Hours" in raw_total_text
+            and hours == [2, 3, 3, 3, 3, 14, 42]
+        ):
+            total["semester_label"] = "Third Semester"
+            total["semester_hours"] = "12"
+            total["total_program_hours"] = "42"
 
-        key = (
-            str(total.get("catalog_year", "")),
-            credential_id,
-            "Fourth Semester",
-            "NAUT 2265",
-        )
+            fourth_total_key = (catalog_year, credential_id, "Fourth Semester", table_index, f"{row_index}.fourth")
+            if fourth_total_key not in existing_total_keys:
+                new_total = dict(total)
+                new_total["source_row_index"] = f"{row_index}.fourth"
+                new_total["semester_label"] = "Fourth Semester"
+                new_total["raw_total_text"] = "NAUT 2265 Practicum Marine Science/Marine Merchant Officer Semester Hours"
+                new_total["semester_hours"] = "2"
+                new_total["total_program_hours"] = ""
+                new_total["raw_hours_text"] = "2 2"
+                repaired_totals.append(new_total)
+                existing_total_keys.add(fourth_total_key)
 
-        if key not in existing:
-            repaired_requirements.append(
-                {
-                    "catalog_year": total.get("catalog_year", ""),
-                    "credential_id": credential_id,
-                    "credential_title": total.get("credential_title", ""),
-                    "source_table_index": total.get("source_table_index", ""),
-                    "source_row_index": total.get("source_row_index", ""),
-                    "requirement_sequence": str(total.get("source_row_index", "")),
-                    "semester_label": "Fourth Semester",
-                    "raw_requirement_text": "NAUT 2265 Practicum Marine Science/Marine Merchant Officer",
-                    "credit_hours": "2",
-                    "raw_credit_hours_text": total.get("raw_hours_text", ""),
-                    "rule_type": "EXACT",
-                    "course_codes": "NAUT 2265",
-                    "issue_flags": "REPAIRED_MERGED_TOTAL_REQUIREMENT_ROW",
-                }
-            )
-            existing.add(key)
+        # Shape in 2022-2023 and 2023-2024:
+        #   Fourth Semester heading + Total Program Hours | 2 2 42
+        if (
+            str(total.get("semester_label", "")) == "Fourth Semester"
+            and raw_total_text == "Total Program Hours"
+            and hours == [2, 2, 42]
+        ):
+            total["raw_total_text"] = "Semester Hours Total Program Hours"
+            total["semester_hours"] = "2"
+            total["total_program_hours"] = "42"
+
+            req_key = (catalog_year, credential_id, "Fourth Semester", "NAUT 2265")
+            if req_key not in existing_req_keys:
+                repaired_requirements.append(
+                    {
+                        "catalog_year": total.get("catalog_year", ""),
+                        "credential_id": credential_id,
+                        "credential_title": total.get("credential_title", ""),
+                        "source_table_index": total.get("source_table_index", ""),
+                        "source_row_index": total.get("source_row_index", ""),
+                        "requirement_sequence": str(total.get("source_row_index", "")),
+                        "semester_label": "Fourth Semester",
+                        "raw_requirement_text": "NAUT 2265 Practicum Marine Science/Marine Merchant Officer",
+                        "credit_hours": "2",
+                        "raw_credit_hours_text": total.get("raw_hours_text", ""),
+                        "rule_type": "EXACT",
+                        "course_codes": "NAUT 2265",
+                        "issue_flags": "REPAIRED_MERGED_TOTAL_REQUIREMENT_ROW",
+                    }
+                )
+                existing_req_keys.add(req_key)
 
     return repaired_requirements, repaired_totals
+
 
 
 
