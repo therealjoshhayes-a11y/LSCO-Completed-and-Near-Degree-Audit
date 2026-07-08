@@ -1,0 +1,11 @@
+StudenID,FirstName,LastName,StudentMajor,Subject,CrseNumb,Section,FinalGrade,Term,DualCreditIndicator,HighSchool,LastTermDualCredit
+R1000001,Jane,Doe,Liberal Arts,ENGL,1301,01,A,Fall 2024,N,, 
+R1000001,Jane,Doe,Liberal Arts,HIST,1301,01,T,Spring 2025,N,, 
+R1000001,Jane,Doe,Liberal Arts,MATH,1314,01,87,Fall 2025,N,, 
+R1000001,Jane,Doe,Liberal Arts,GOVT,2305,01,,Fall 2025,N,, 
+R1000001,Jane,Doe,Liberal Arts,BIOL,1406,01,I,Spring 2025,N,, 
+R1000001,Jane,Doe,Liberal Arts,SPCH,1315,01,S,Spring 2025,Y,Orangefield HS,Spring 2025
+R1000002,John,Smith,Welding,WLDG,1323,01,B,Fall 2024,N,, 
+R1000002,John,Smith,Welding,WLDG,1323,02,A,Spring 2025,N,, 
+R1000002,John,Smith,Welding,WLDG,1327,01,W,Fall 2024,N,, 
+R1000002,John,Smith,Welding,WLDG,1428,01,C,Spring 2025,N,, 
