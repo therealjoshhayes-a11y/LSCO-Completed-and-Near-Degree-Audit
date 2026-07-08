@@ -1128,6 +1128,174 @@ def write_csv(path: Path, rows: list[dict[str, str]], fieldnames: list[str]) -> 
 
 
 
+
+
+ORDINAL_SEMESTER_LABELS = [
+    "First Semester",
+    "Second Semester",
+    "Third Semester",
+    "Fourth Semester",
+    "Fifth Semester",
+    "Sixth Semester",
+    "Seventh Semester",
+    "Eighth Semester",
+]
+
+
+def repair_repeated_semester_total_labels(
+    requirements: list[dict[str, str]],
+    totals: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Repair semester labels when DOCX omits a heading between semester totals.
+
+    Example observed:
+        First Semester total
+        Second Semester total
+        Second Semester total
+        Third Semester total
+
+    If the total rows are ordered semester blocks, relabel them by position:
+        First, Second, Third, Fourth
+    and relabel requirement rows according to the total row that closes each block.
+    """
+
+    repaired_requirements = [dict(row) for row in requirements]
+    repaired_totals = [dict(row) for row in totals]
+
+    totals_by_table: dict[tuple[str, str, str], list[tuple[int, dict[str, str]]]] = {}
+
+    for total_index, row in enumerate(repaired_totals):
+        semester_label = str(row.get("semester_label", ""))
+        if semester_label not in ORDINAL_SEMESTER_LABELS:
+            continue
+
+        key = (
+            str(row.get("credential_id", "")),
+            str(row.get("source_table_index", "")),
+            str(row.get("catalog_year", "")),
+        )
+        totals_by_table.setdefault(key, []).append((total_index, row))
+
+    for key, indexed_totals in totals_by_table.items():
+        indexed_totals.sort(key=lambda item: int(float(item[1].get("source_row_index", 0))))
+
+        if len(indexed_totals) < 3 or len(indexed_totals) > len(ORDINAL_SEMESTER_LABELS):
+            continue
+
+        current_labels = [row.get("semester_label", "") for _, row in indexed_totals]
+
+        # Only repair obvious repeated-label sequences.
+        if len(set(current_labels)) == len(current_labels):
+            continue
+
+        if any(label not in ORDINAL_SEMESTER_LABELS for label in current_labels):
+            continue
+
+        inferred_labels = ORDINAL_SEMESTER_LABELS[:len(indexed_totals)]
+
+        if current_labels == inferred_labels:
+            continue
+
+        boundary_rows: list[tuple[int, str]] = []
+
+        for offset, (total_index, total_row) in enumerate(indexed_totals):
+            inferred_label = inferred_labels[offset]
+            total_row_index = int(float(total_row.get("source_row_index", 0)))
+
+            repaired_totals[total_index]["semester_label"] = inferred_label
+
+            boundary_rows.append((total_row_index, inferred_label))
+
+        previous_boundary = -1
+        credential_id, source_table_index, catalog_year = key
+
+        for total_row_index, inferred_label in boundary_rows:
+            for req in repaired_requirements:
+                if str(req.get("credential_id", "")) != credential_id:
+                    continue
+                if str(req.get("source_table_index", "")) != source_table_index:
+                    continue
+                if str(req.get("catalog_year", "")) != catalog_year:
+                    continue
+
+                req_row_index = int(float(req.get("source_row_index", 0)))
+                if previous_boundary < req_row_index < total_row_index:
+                    req["semester_label"] = inferred_label
+
+                    flags = [
+                        flag for flag in str(req.get("issue_flags", "")).split(";")
+                        if flag and flag.lower() != "nan"
+                    ]
+                    flags.append("REPAIRED_REPEATED_SEMESTER_TOTAL_LABEL")
+                    req["issue_flags"] = ";".join(dict.fromkeys(flags))
+
+            previous_boundary = total_row_index
+
+    return repaired_requirements, repaired_totals
+
+
+
+def repair_adjacent_elective_option_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Merge option rows split from their trailing Elective token.
+
+    Examples:
+        EDUC 1300 (...) or Approved
+        Elective
+
+        ITDF 1300 ... OR *CRIJ/CJSA/CJCR
+        elective
+    """
+
+    repaired: list[dict[str, str]] = []
+    index = 0
+
+    while index < len(rows):
+        current = dict(rows[index])
+        next_row = dict(rows[index + 1]) if index + 1 < len(rows) else None
+
+        current_text = clean_text(current.get("raw_requirement_text", ""))
+        next_text = clean_text(next_row.get("raw_requirement_text", "")) if next_row else ""
+
+        same_requirement_group = (
+            next_row is not None
+            and current.get("credential_id") == next_row.get("credential_id")
+            and current.get("source_table_index") == next_row.get("source_table_index")
+            and current.get("semester_label") == next_row.get("semester_label")
+        )
+
+        should_merge = (
+            same_requirement_group
+            and re.fullmatch(r"elective", next_text, re.I)
+            and (
+                re.search(r"\bor\s+approved\s*$", current_text, re.I)
+                or re.search(r"\bOR\s+\*[A-Z]{3,4}(?:/[A-Z]{3,4})+\s*$", current_text, re.I)
+            )
+        )
+
+        if should_merge:
+            merged_text = clean_text(f"{current_text} {next_text}")
+
+            current["raw_requirement_text"] = merged_text
+            current["course_codes"] = ";".join(dict.fromkeys(COURSE_RE.findall(merged_text)))
+            current["rule_type"] = "ANY_N"
+
+            flags = [
+                flag for flag in str(current.get("issue_flags", "")).split(";")
+                if flag and flag.lower() != "nan"
+            ]
+            flags.append("MERGED_ADJACENT_ELECTIVE_OPTION")
+            current["issue_flags"] = ";".join(dict.fromkeys(flags))
+
+            repaired.append(current)
+            index += 2
+        else:
+            repaired.append(current)
+            index += 1
+
+    return repaired
+
+
+
 def split_compressed_criminal_justice_stack_row(row: dict[str, str]) -> list[dict[str, str]] | None:
     """Split compressed CJ course stacks with parenthetical/equivalent options.
 
@@ -1463,6 +1631,8 @@ def extract_catalog(record) -> None:
 
     all_requirements = repair_compressed_criminal_justice_stack_rows(all_requirements)
     all_requirements = repair_parenthetical_or_split_rows(all_requirements)
+    all_requirements = repair_adjacent_elective_option_rows(all_requirements)
+    all_requirements, all_totals = repair_repeated_semester_total_labels(all_requirements, all_totals)
 
     out_dir = Path("data") / "processed" / "catalogs" / record.catalog_year
 
