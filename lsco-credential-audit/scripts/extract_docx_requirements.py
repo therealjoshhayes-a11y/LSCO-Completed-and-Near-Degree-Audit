@@ -1168,6 +1168,37 @@ def split_compact_core_total_text(text: str, hour_values: list[int]) -> list[str
 
 
 
+
+def repair_combined_semester_program_total_rows(totals: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Repair rows like 'Semester Hours Program Hours | 5 15'.
+
+    In these rows, the first number is the semester total and the second number
+    is the program total. The generic total parser can misfile the second value
+    as semester_hours and leave total_program_hours blank.
+    """
+
+    repaired = [dict(row) for row in totals]
+
+    for row in repaired:
+        raw_total_text = clean_text(str(row.get("raw_total_text", "")))
+        raw_hours_text = str(row.get("raw_hours_text", ""))
+
+        if not re.fullmatch(r"Semester Hours Program Hours", raw_total_text, re.I):
+            continue
+
+        hours = parse_hours(raw_hours_text)
+        if len(hours) != 2:
+            continue
+
+        semester_total, program_total = hours
+
+        row["semester_hours"] = str(semester_total)
+        row["total_program_hours"] = str(program_total)
+
+    return repaired
+
+
+
 def repair_compact_total_row_semester_hours(totals: list[dict[str, str]]) -> list[dict[str, str]]:
     """Fix only compact rows where semester total was misfiled as program total.
 
@@ -2067,6 +2098,7 @@ def extract_catalog(record) -> None:
     all_requirements = repair_parenthetical_or_split_rows(all_requirements)
     all_requirements = repair_adjacent_elective_option_rows(all_requirements)
     all_requirements, all_totals = repair_repeated_semester_total_labels(all_requirements, all_totals)
+    all_totals = repair_combined_semester_program_total_rows(all_totals)
     all_totals = repair_compact_total_row_semester_hours(all_totals)
     all_requirements = synthesize_requirements_from_compact_total_rows(all_requirements, all_totals)
 
