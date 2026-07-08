@@ -1170,11 +1170,14 @@ def split_compact_core_total_text(text: str, hour_values: list[int]) -> list[str
 
 
 def repair_combined_semester_program_total_rows(totals: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Repair rows like 'Semester Hours Program Hours | 5 15'.
+    """Repair rows that combine semester and program totals.
 
-    In these rows, the first number is the semester total and the second number
-    is the program total. The generic total parser can misfile the second value
-    as semester_hours and leave total_program_hours blank.
+    Shapes:
+        Semester Hours Program Hours | 5 15
+        ITCC ... Semester Hours Program Total Hours | 3 3 3 9 15
+
+    In the second shape, the final two numbers are semester total and program
+    total when the preceding requirement hours sum to the penultimate number.
     """
 
     repaired = [dict(row) for row in totals]
@@ -1183,19 +1186,38 @@ def repair_combined_semester_program_total_rows(totals: list[dict[str, str]]) ->
         raw_total_text = clean_text(str(row.get("raw_total_text", "")))
         raw_hours_text = str(row.get("raw_hours_text", ""))
 
-        if not re.fullmatch(r"Semester Hours Program Hours", raw_total_text, re.I):
-            continue
-
         hours = parse_hours(raw_hours_text)
-        if len(hours) != 2:
+
+        if re.fullmatch(r"Semester Hours Program Hours", raw_total_text, re.I):
+            if len(hours) != 2:
+                continue
+
+            semester_total, program_total = hours
+            row["semester_hours"] = str(semester_total)
+            row["total_program_hours"] = str(program_total)
             continue
 
-        semester_total, program_total = hours
+        if not re.search(r"\bSemester Hours\s+Program Total Hours\b", raw_total_text, re.I):
+            continue
+
+        if len(hours) < 3:
+            continue
+
+        requirement_hours = hours[:-2]
+        semester_total = hours[-2]
+        program_total = hours[-1]
+
+        if not requirement_hours:
+            continue
+
+        if sum(requirement_hours) != semester_total:
+            continue
 
         row["semester_hours"] = str(semester_total)
         row["total_program_hours"] = str(program_total)
 
     return repaired
+
 
 
 
