@@ -1235,6 +1235,115 @@ def repair_repeated_semester_total_labels(
 
 
 
+
+def split_simple_compressed_course_stack_row(row: dict[str, str]) -> list[dict[str, str]] | None:
+    """Split compressed one-semester course stacks.
+
+    Example:
+        COSC 1301 ... OR BCIS 1305 ... ITSY 1342 ... ITSC 1325 ...
+
+    becomes separate requirement rows, preserving OR options in one row.
+    """
+
+    text = clean_text(row.get("raw_requirement_text", ""))
+    issue_flags = str(row.get("issue_flags", ""))
+
+    if "COMPRESSED_MULTI_COURSE_ROW" not in issue_flags:
+        return None
+
+    # Let specialized criminal justice stack repair handle those rows.
+    if re.search(r"\b(?:CRIJ|CJSA|CJCR)\s+\d{4}\b", text):
+        return None
+
+    raw_hours_text = (
+        row.get("raw_credit_hours_text")
+        or row.get("raw_hours_text")
+        or row.get("credit_hours")
+        or ""
+    )
+    parsed_hours = parse_hours(str(raw_hours_text))
+
+    course_matches = list(COURSE_RE.finditer(text))
+    if len(course_matches) < 3:
+        return None
+
+    fragments: list[str] = []
+    for index, match in enumerate(course_matches):
+        start = match.start()
+        end = course_matches[index + 1].start() if index + 1 < len(course_matches) else len(text)
+        fragments.append(clean_text(text[start:end]))
+
+    grouped: list[str] = []
+    current = ""
+
+    for fragment in fragments:
+        if not current:
+            current = fragment
+            continue
+
+        should_continue = bool(re.search(r"\bOR\s*$", current, re.I))
+
+        if should_continue:
+            current = clean_text(f"{current} {fragment}")
+        else:
+            grouped.append(current)
+            current = fragment
+
+    if current:
+        grouped.append(current)
+
+    if len(grouped) < 2:
+        return None
+
+    if len(parsed_hours) < len(grouped):
+        return None
+
+    hour_values = parsed_hours[:len(grouped)]
+    if len(hour_values) != len(grouped):
+        return None
+
+    base_sequence_raw = row.get("requirement_sequence", 0)
+    try:
+        base_sequence = int(float(base_sequence_raw))
+    except (TypeError, ValueError):
+        base_sequence = 0
+
+    out: list[dict[str, str]] = []
+
+    for offset, fragment in enumerate(grouped):
+        new_row = dict(row)
+        new_row["requirement_sequence"] = f"{base_sequence}.{offset + 1}"
+        new_row["raw_requirement_text"] = fragment
+        new_row["credit_hours"] = str(hour_values[offset])
+        new_row["course_codes"] = ";".join(dict.fromkeys(COURSE_RE.findall(fragment)))
+        new_row["rule_type"] = "ANY_N" if re.search(r"\bOR\b", fragment, re.I) else parse_rule_type(fragment)
+
+        flags = [
+            flag for flag in str(new_row.get("issue_flags", "")).split(";")
+            if flag and flag.lower() != "nan"
+        ]
+        flags.append("SPLIT_SIMPLE_COMPRESSED_COURSE_STACK")
+        new_row["issue_flags"] = ";".join(dict.fromkeys(flags))
+
+        out.append(new_row)
+
+    return out
+
+
+def repair_simple_compressed_course_stack_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    repaired: list[dict[str, str]] = []
+
+    for row in rows:
+        split_rows = split_simple_compressed_course_stack_row(row)
+        if split_rows:
+            repaired.extend(split_rows)
+        else:
+            repaired.append(row)
+
+    return repaired
+
+
+
 def repair_adjacent_elective_option_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     """Merge option rows split from their trailing Elective token.
 
@@ -1630,6 +1739,7 @@ def extract_catalog(record) -> None:
 
 
     all_requirements = repair_compressed_criminal_justice_stack_rows(all_requirements)
+    all_requirements = repair_simple_compressed_course_stack_rows(all_requirements)
     all_requirements = repair_parenthetical_or_split_rows(all_requirements)
     all_requirements = repair_adjacent_elective_option_rows(all_requirements)
     all_requirements, all_totals = repair_repeated_semester_total_labels(all_requirements, all_totals)
