@@ -58,7 +58,6 @@ for req_path in sorted(Path("data/processed/catalogs").glob("*/requirements_docx
         parsed_hours = sum(
             to_int(row.get("credit_hours", "")) or 0
             for row in req_rows
-            if row.get("rule_type") != "NON_COURSE"
         )
 
         expected_hours = semester_totals.get(sem_key)
@@ -90,7 +89,6 @@ for req_path in sorted(Path("data/processed/catalogs").glob("*/requirements_docx
         parsed_hours = sum(
             to_int(row.get("credit_hours", "")) or 0
             for row in req_rows
-            if row.get("rule_type") != "NON_COURSE"
         )
 
         expected_hours = program_totals.get(key)
