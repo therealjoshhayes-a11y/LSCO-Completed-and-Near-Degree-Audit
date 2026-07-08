@@ -29,8 +29,10 @@ SESSION_LABEL_RE = re.compile(
 def clean_text(value: str) -> str:
     text = " ".join((value or "").split())
 
-    # DOCX exports sometimes collapse the space between a course code
-    # and its title: MRKG 1301Customer -> MRKG 1301 Customer.
+    # DOCX exports sometimes collapse course spacing:
+    #   ENGL1301 -> ENGL 1301
+    #   MRKG 1301Customer -> MRKG 1301 Customer.
+    text = re.sub(r"\b([A-Z]{3,4})(\d{4})\b", r"\1 \2", text)
     text = re.sub(r"\b([A-Z]{3,4}\s+\d{4})(?=[A-Za-z])", r"\1 ", text)
 
     return text
@@ -267,6 +269,29 @@ def strip_trailing_total_hours(hours: list[int]) -> list[int]:
     return values
 
 
+def normalize_requirement_hours(raw_hours_text: str, expected_count: int) -> list[int]:
+    """Return requirement-level hours aligned to emitted fragments.
+
+    Handles rows like:
+        3 3 3 3 15
+
+    where 15 is the semester total and the final requirement hour is omitted.
+    In that case:
+        15 - (3 + 3 + 3 + 3) = 3
+    """
+    values = strip_trailing_total_hours(parse_hours(raw_hours_text))
+
+    if expected_count > 1 and len(values) == expected_count:
+        possible_total = values[-1]
+        previous_sum = sum(values[:-1])
+        inferred_last = possible_total - previous_sum
+
+        if possible_total >= 10 and 1 <= inferred_last <= 6:
+            return values[:-1] + [inferred_last]
+
+    return values
+
+
 MIXED_NON_COURSE_MARKER_RE = re.compile(
     r"\b(?:"
     r"Lang(?:uage)?[, ]+Phil(?:osophy)?[, ]+Culture\s+OR\s+Creative Arts"
@@ -340,7 +365,6 @@ def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, 
         return [row]
 
     raw_hours_text = row.get("raw_credit_hours_text", row.get("credit_hours", ""))
-    hour_values = strip_trailing_total_hours(parse_hours(raw_hours_text))
 
     boundaries = []
     for match in course_matches:
@@ -352,6 +376,8 @@ def split_mixed_course_core_elective_row(row: dict[str, str]) -> list[dict[str, 
 
     if len(boundaries) <= len(course_matches):
         return [row]
+
+    hour_values = normalize_requirement_hours(raw_hours_text, len(boundaries))
 
     fragments = []
     for index, (start, kind, match) in enumerate(boundaries):
@@ -427,7 +453,6 @@ def split_internal_or_compressed_course_row(row: dict[str, str]) -> list[dict[st
         return [row]
 
     raw_hours_text = row.get("raw_credit_hours_text", row.get("credit_hours", ""))
-    hour_values = strip_trailing_total_hours(parse_hours(raw_hours_text))
 
     grouped_parts: list[str] = []
     index = 0
@@ -441,6 +466,8 @@ def split_internal_or_compressed_course_row(row: dict[str, str]) -> list[dict[st
         else:
             grouped_parts.append(part)
             index += 1
+
+    hour_values = normalize_requirement_hours(raw_hours_text, len(grouped_parts))
 
     if len(grouped_parts) != len(hour_values):
         return [row]
@@ -471,7 +498,7 @@ def split_leading_or_compressed_row(row: dict[str, str]) -> list[dict[str, str]]
 
     course_codes = COURSE_RE.findall(text)
     raw_hours_text = row.get("raw_credit_hours_text", row.get("credit_hours", ""))
-    hour_values = strip_trailing_total_hours(parse_hours(raw_hours_text))
+    hour_values = normalize_requirement_hours(raw_hours_text, len(course_codes) - 1)
 
     if len(course_codes) < 3:
         return [row]
@@ -552,7 +579,7 @@ def split_compressed_course_row(row: dict[str, str]) -> list[dict[str, str]]:
         return [row]
 
     raw_hours_text = row.get("raw_credit_hours_text", row.get("credit_hours", ""))
-    hour_values = strip_trailing_total_hours(parse_hours(raw_hours_text))
+    hour_values = normalize_requirement_hours(raw_hours_text, len(course_codes))
 
     if len(hour_values) < len(course_codes):
         return [row]
