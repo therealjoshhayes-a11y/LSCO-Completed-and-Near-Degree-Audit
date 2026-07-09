@@ -330,7 +330,7 @@ def summarize_award_term(group: pd.DataFrame, audit_status: str) -> tuple[str, s
 
 
 def audit() -> None:
-    courses = pd.read_csv(STUDENT_COURSES)
+    courses = pd.read_csv(STUDENT_COURSES, dtype=str, low_memory=False)
     requirements = pd.read_csv(REQUIREMENTS)
     core_lookup = load_core_lookup()
     elective_rules = load_elective_rules()
