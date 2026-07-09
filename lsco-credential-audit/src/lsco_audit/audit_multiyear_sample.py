@@ -8,6 +8,7 @@ COMPLETION_GRADES = {"A", "B", "C", "D", "S", "E", "T"}
 STUDENT_COURSES = PROCESSED_DIR / "student_course_history_normalized.csv"
 REQUIREMENTS = PROCESSED_DIR / "catalogs" / "requirements_master_multiyear.csv"
 CORE_LOOKUP = PROCESSED_DIR / "core_bucket_lookup.csv"
+ELECTIVE_RULES = PROCESSED_DIR / "catalogs" / "elective_rules_multicatalog.csv"
 ELIGIBILITY = PROCESSED_DIR / "student_catalog_eligibility.csv"
 
 DETAIL_OUTPUT = PROCESSED_DIR / "multiyear_sample_audit_results.csv"
@@ -45,6 +46,44 @@ def load_core_lookup() -> dict[str, set[str]]:
         bucket: set(group["course_code"].dropna().astype(str))
         for bucket, group in lookup.groupby("bucket_name")
     }
+
+
+def load_elective_rules() -> dict[str, dict]:
+    if not ELECTIVE_RULES.exists():
+        return {}
+
+    rules = pd.read_csv(ELECTIVE_RULES, dtype=str).fillna("")
+    return {
+        str(row["requirement_id"]): row.to_dict()
+        for _, row in rules.iterrows()
+    }
+
+
+def course_rubric(course_code: str) -> str:
+    parts = str(course_code).strip().split()
+    if not parts:
+        return ""
+    return parts[0].upper()
+
+
+def match_allowed_rubric_elective(
+    available_courses: set[str],
+    allowed_rubrics: str,
+) -> list[str]:
+    rubrics = {
+        part.strip().upper()
+        for part in str(allowed_rubrics).split(";")
+        if part.strip()
+    }
+
+    if not rubrics:
+        return []
+
+    return sorted(
+        course_code
+        for course_code in available_courses
+        if course_rubric(course_code) in rubrics
+    )
 
 
 def completed_course_lookup(courses: pd.DataFrame) -> dict[str, dict]:
@@ -139,10 +178,27 @@ def audit_non_elective_requirement(
 
 
 def audit_elective_requirement(
+    requirement_id: str,
     available_courses: set[str],
+    elective_rules: dict[str, dict],
 ) -> tuple[str, list[str]]:
-    # Do not auto-award electives from any unused course.
-    # Electives require resolver logic before they can be safely marked MET.
+    rule = elective_rules.get(str(requirement_id))
+
+    if not rule:
+        return "UNRESOLVED_ELECTIVE", []
+
+    resolver_type = str(rule.get("resolver_type", ""))
+    allowed_rubrics = str(rule.get("allowed_rubrics", ""))
+
+    if resolver_type in {"RUBRIC_ELECTIVE", "BUSINESS_ELECTIVE"}:
+        matched = match_allowed_rubric_elective(
+            available_courses=available_courses,
+            allowed_rubrics=allowed_rubrics,
+        )
+
+        if matched:
+            return "MET", [matched[0]]
+
     return "UNRESOLVED_ELECTIVE", []
 
 
@@ -163,6 +219,7 @@ def audit_student_credential(
     credential_requirements: pd.DataFrame,
     course_lookup: dict[str, dict],
     core_lookup: dict[str, set[str]],
+    elective_rules: dict[str, dict],
 ) -> list[dict]:
     used_courses = set()
     detail_rows = []
@@ -187,7 +244,11 @@ def audit_student_credential(
         available_courses = set(course_lookup) - used_courses
 
         if set(group["option_type"]) <= {"ELECTIVE"}:
-            status, matched = audit_elective_requirement(available_courses)
+            status, matched = audit_elective_requirement(
+                requirement_id=requirement_id,
+                available_courses=available_courses,
+                elective_rules=elective_rules,
+            )
         else:
             status, matched = audit_non_elective_requirement(
                 group=group,
@@ -272,6 +333,7 @@ def audit() -> None:
     courses = pd.read_csv(STUDENT_COURSES)
     requirements = pd.read_csv(REQUIREMENTS)
     core_lookup = load_core_lookup()
+    elective_rules = load_elective_rules()
 
     if ELIGIBILITY.exists():
         eligibility = pd.read_csv(ELIGIBILITY, dtype=str)
@@ -302,6 +364,7 @@ def audit() -> None:
                     credential_requirements=credential_requirements,
                     course_lookup=course_lookup,
                     core_lookup=core_lookup,
+                    elective_rules=elective_rules,
                 )
             )
 
