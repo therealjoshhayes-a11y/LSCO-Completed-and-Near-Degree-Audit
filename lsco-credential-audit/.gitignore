@@ -34,3 +34,4 @@ data/interim/catalogs/
 
 # Generated catalog parser outputs
 data/processed/catalogs/
+data/processed/full_actual_audit/
