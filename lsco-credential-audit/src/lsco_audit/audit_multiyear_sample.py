@@ -141,10 +141,8 @@ def audit_non_elective_requirement(
 def audit_elective_requirement(
     available_courses: set[str],
 ) -> tuple[str, list[str]]:
-    if available_courses:
-        selected = sorted(available_courses)[0]
-        return "MET", [selected]
-
+    # Do not auto-award electives from any unused course.
+    # Electives require resolver logic before they can be safely marked MET.
     return "UNRESOLVED_ELECTIVE", []
 
 
