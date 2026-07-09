@@ -173,6 +173,9 @@ def classify_opportunity(row: pd.Series) -> tuple[str, str, int]:
             return "REQUIREMENT_COMPLETE_REVIEW", "REQUIREMENT_COMPLETE_REVIEW", 90
         return "REQUIREMENT_COMPLETE", "REQUIREMENT_COMPLETE", 100
 
+    if met == 0:
+        return "NO_MATCH", "NO_ACTION", 5
+
     if unresolved > 0:
         if missing <= 3:
             if has_stale_history:
@@ -187,9 +190,6 @@ def classify_opportunity(row: pd.Series) -> tuple[str, str, int]:
         if has_stale_history:
             return "NEAR_REQUIREMENT_COMPLETE_REVIEW", "NEAR_REQUIREMENT_COMPLETE_REVIEW", 75
         return "NEAR_REQUIREMENT_COMPLETE", "NEAR_REQUIREMENT_COMPLETE", 85
-
-    if met == 0:
-        return "NO_MATCH", "NO_ACTION", 5
 
     progress_ratio = met / total if total else 0
 
