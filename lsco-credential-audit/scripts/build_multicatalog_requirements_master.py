@@ -47,6 +47,15 @@ def normalize_rule_type(row: pd.Series) -> str:
     rule_type = normalize_text(row.get("rule_type"))
     text = normalize_text(row.get("raw_requirement_text")).upper()
 
+    # Rescue malformed ANY_N rows that are actually electives.
+    # Only convert when the row has no concrete course choices.
+    # Example: Electrician Electrical Technology 2024/2025
+    # "Lang, Phil, Culture or Creative Arts Elective ??"
+    # extracted as ANY_N with no course choices.
+    course_codes = normalize_text(row.get("course_codes"))
+    if rule_type == "ANY_N" and "ELECTIVE" in text and course_codes == "":
+        return "ELECTIVE"
+
     if rule_type != "NON_COURSE":
         return rule_type
 
