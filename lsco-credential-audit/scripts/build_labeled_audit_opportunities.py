@@ -170,35 +170,35 @@ def classify_opportunity(row: pd.Series) -> tuple[str, str, int]:
 
     if row.get("audit_status") == "COMPLETE":
         if has_stale_history:
-            return "COMPLETE_STALE_HISTORY_REVIEW", "COMPLETE_REVIEW", 90
-        return "COMPLETE_READY", "COMPLETE", 100
+            return "REQUIREMENT_COMPLETE_REVIEW", "REQUIREMENT_COMPLETE_REVIEW", 90
+        return "REQUIREMENT_COMPLETE", "REQUIREMENT_COMPLETE", 100
 
     if unresolved > 0:
         if missing <= 3:
             if has_stale_history:
-                return "REVIEW_REQUIRED_ELECTIVE_STALE_HISTORY", "HUMAN_REVIEW", 70
-            return "REVIEW_REQUIRED_ELECTIVE", "HUMAN_REVIEW", 80
+                return "ELECTIVE_REVIEW_STALE_HISTORY", "ELECTIVE_REVIEW", 70
+            return "ELECTIVE_REVIEW_REQUIRED", "ELECTIVE_REVIEW", 80
 
         if has_stale_history:
-            return "INCOMPLETE_WITH_ELECTIVE_STALE_HISTORY", "LOW_PRIORITY_REVIEW", 35
-        return "INCOMPLETE_WITH_ELECTIVE_REVIEW", "LOW_PRIORITY_REVIEW", 45
+            return "IN_PROGRESS_ELECTIVE_REVIEW_STALE_HISTORY", "IN_PROGRESS_REVIEW", 35
+        return "IN_PROGRESS_ELECTIVE_REVIEW", "IN_PROGRESS_REVIEW", 45
 
     if missing <= 3 and met > 0:
         if has_stale_history:
-            return "NEAR_COMPLETE_STALE_HISTORY_REVIEW", "NEAR_COMPLETE_REVIEW", 75
-        return "NEAR_COMPLETE_COURSEWORK", "NEAR_COMPLETE", 85
+            return "NEAR_REQUIREMENT_COMPLETE_REVIEW", "NEAR_REQUIREMENT_COMPLETE_REVIEW", 75
+        return "NEAR_REQUIREMENT_COMPLETE", "NEAR_REQUIREMENT_COMPLETE", 85
 
     if met == 0:
-        return "INCOMPLETE_NO_PROGRESS", "NO_ACTION", 5
+        return "NO_MATCH", "NO_ACTION", 5
 
     progress_ratio = met / total if total else 0
 
     if progress_ratio >= 0.5:
         if has_stale_history:
-            return "INCOMPLETE_HIGH_PROGRESS_STALE_HISTORY", "LOW_PRIORITY_REVIEW", 40
-        return "INCOMPLETE_HIGH_PROGRESS", "LOW_PRIORITY_REVIEW", 50
+            return "IN_PROGRESS_HIGH_STALE_HISTORY", "IN_PROGRESS_REVIEW", 40
+        return "IN_PROGRESS_HIGH", "IN_PROGRESS_REVIEW", 50
 
-    return "INCOMPLETE_LOW_PROGRESS", "NO_ACTION", 15
+    return "IN_PROGRESS_LOW", "NO_ACTION", 15
 
 
 def add_labels(summary: pd.DataFrame, missing_summary: pd.DataFrame) -> pd.DataFrame:
@@ -230,7 +230,7 @@ def add_labels(summary: pd.DataFrame, missing_summary: pd.DataFrame) -> pd.DataF
         >= STALE_LONG_SEMESTER_GAP_THRESHOLD
     )
     labeled["requires_degreeworks_review"] = labeled["action_band"].isin(
-        ["COMPLETE", "COMPLETE_REVIEW", "NEAR_COMPLETE", "NEAR_COMPLETE_REVIEW", "HUMAN_REVIEW"]
+        ["REQUIREMENT_COMPLETE", "REQUIREMENT_COMPLETE_REVIEW", "NEAR_REQUIREMENT_COMPLETE", "NEAR_REQUIREMENT_COMPLETE_REVIEW", "ELECTIVE_REVIEW"]
     )
     labeled["requires_catalog_policy_review"] = labeled["requires_continuity_review"]
     labeled["requires_substitution_review"] = False

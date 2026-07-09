@@ -70,16 +70,16 @@ def main() -> None:
     top_per_student = ranked[ranked["student_overall_rank"].eq(1)].copy()
 
     near_complete = ranked[
-        ranked["action_band"].isin(["NEAR_COMPLETE", "NEAR_COMPLETE_REVIEW"])
+        ranked["action_band"].isin(["NEAR_REQUIREMENT_COMPLETE", "NEAR_REQUIREMENT_COMPLETE_REVIEW"])
     ].copy()
 
     review_required = ranked[
-        ranked["action_band"].eq("HUMAN_REVIEW")
+        ranked["action_band"].eq("ELECTIVE_REVIEW")
         | ranked["requires_elective_review"].astype(bool)
     ].copy()
 
     low_priority_review = ranked[
-        ranked["action_band"].eq("LOW_PRIORITY_REVIEW")
+        ranked["action_band"].eq("IN_PROGRESS_REVIEW")
     ].copy()
 
     write_queue(ranked, FULL_RANKED_OUTPUT)
