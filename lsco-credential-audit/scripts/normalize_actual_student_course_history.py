@@ -8,19 +8,47 @@ OUTPUT_PATH = Path("data/processed/normalized_actual_student_course_history.csv"
 QA_OUTPUT_PATH = Path("data/processed/normalized_actual_student_course_history_qa.csv")
 
 
-PASSING_GRADES = {
-    "A",
-    "B",
-    "C",
-    "D",
-    "P",
-    "CR",
-    "S",
-    "TA",
-    "TB",
-    "TC",
-    "TD",
-}
+PASSING_GRADES = {"A", "B", "C", "D", "S", "P", "CR", "TA", "TB", "TC", "TD", "TS", "T"}
+
+def is_passing_grade(grade: str) -> bool:
+    """
+    LSCO grade interpretation for audit-completion purposes.
+
+    Count:
+      A/B/C/D
+      S
+      P/CR if present
+      T transfer work when the carried grade is passing:
+        T, TA, TB, TC, TD, TS
+
+    Do not count:
+      F, U, TF, TU
+      I
+      Q, QL, W
+      blank/current-term grades
+      numeric grades not rolled to academic history
+      NG
+
+    E credit-by-exam grades are not currently expected in this extract.
+    They are left out until explicitly approved for completion logic.
+    """
+    g = str(grade).strip().upper()
+
+    if g == "":
+        return False
+
+    # Numeric grades have not rolled to academic history.
+    if g.isdigit():
+        return False
+
+    if g in {"A", "B", "C", "D", "S", "P", "CR"}:
+        return True
+
+    if g in {"T", "TA", "TB", "TC", "TD", "TS"}:
+        return True
+
+    return False
+
 
 
 GRADE_RANK = {
@@ -87,7 +115,7 @@ def main() -> None:
     df["high_school"] = raw["HighSchool"].astype(str).str.strip()
     df["last_term_dual_credit"] = raw["LastTermDualCredit"].astype(str).str.strip()
 
-    df["is_passing"] = df["final_grade"].isin(PASSING_GRADES)
+    df["is_passing"] = df["final_grade"].map(is_passing_grade)
     df["grade"] = df["final_grade"]
     df["passed"] = df["is_passing"]
     df["grade_rank"] = df["final_grade"].map(GRADE_RANK).fillna(0).astype(int)

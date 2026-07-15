@@ -66,23 +66,6 @@ def normalize_bucket_name(value: str) -> str | None:
     if "COMPONENT AREA OPTION" in text or "OPTION CORE" in text:
         return "COMPONENT_AREA_OPTION_CORE"
 
-    # Controlled historical and teaching-plan aliases.
-    # These keys exist in the catalog-year-aware core lookup.
-    if text == "PHYSICAL SCIENCE":
-        return "PHYSICAL_SCIENCE"
-
-    if text in {
-        "LIFE OR PHYSICAL SCIENCE",
-        "LIFE OR PHYSICAL SCIENCES",
-    }:
-        return "LIFE_OR_PHYSICAL_SCIENCES"
-
-    if text == "LIFE SCIENCE CORE 030":
-        return "LIFE_SCIENCE_CORE_030"
-
-    if text == "PHYSICAL SCIENCE CORE 030":
-        return "PHYSICAL_SCIENCE_CORE_030"
-
     return None
 
 

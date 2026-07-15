@@ -32,38 +32,36 @@ def parse_catalog_start_year(catalog_year: str) -> int:
 
 
 def catalog_start_term_sort(catalog_year: str) -> int:
-    """Fall opening term for the catalog year."""
     start_year = parse_catalog_start_year(catalog_year)
-    return start_year * 100 + 90
+    return start_year * 10 + 6  # Fall
 
 
 def catalog_year_end_term_sort(catalog_year: str) -> int:
-    """Final summer term in the catalog year."""
     start_year = parse_catalog_start_year(catalog_year)
-    return (start_year + 1) * 100 + 64
+    return (start_year + 1) * 10 + 5  # Summer II / end of catalog year
 
 
 def catalog_life_end_term_sort(catalog_year: str) -> int:
-    """Final summer term after the five-year catalog life."""
     start_year = parse_catalog_start_year(catalog_year)
-    return (start_year + 5) * 100 + 64
+    return (start_year + 5) * 10 + 5  # Summer II five years later
 
 
 def term_sort_to_long_ordinal(term_sort: int) -> int | None:
-    """Map LSCO six-digit Banner terms to long-semester order.
+    """Map Spring/Fall terms to a continuous long-semester ordinal.
 
-    Spring-family suffixes: 10, 13, 15
-    Fall-family suffixes:   90, 91, 92, 95
-    Summer-family suffixes: 60, 64 and do not count as long semesters.
+    Spring YYYY -> YYYY * 2
+    Fall YYYY   -> YYYY * 2 + 1
+
+    Summer terms do not count as long semesters for continuity.
     """
-    value = int(term_sort)
-    year = value // 100
-    suffix = value % 100
 
-    if suffix in {10, 13, 15}:
+    year = int(term_sort) // 10
+    term_index = int(term_sort) % 10
+
+    if term_index == 1:
         return year * 2
 
-    if suffix in {90, 91, 92, 95}:
+    if term_index == 6:
         return year * 2 + 1
 
     return None

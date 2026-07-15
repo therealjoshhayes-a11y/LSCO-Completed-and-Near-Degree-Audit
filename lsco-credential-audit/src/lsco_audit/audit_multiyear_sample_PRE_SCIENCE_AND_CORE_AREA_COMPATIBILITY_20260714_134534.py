@@ -9,10 +9,7 @@ COMPLETION_GRADES = {"A", "B", "C", "D", "S", "E", "T"}
 
 STUDENT_COURSES = PROCESSED_DIR / "student_course_history_normalized.csv"
 REQUIREMENTS = PROCESSED_DIR / "catalogs" / "requirements_master_multiyear.csv"
-CORE_LOOKUP = (
-    PROCESSED_DIR
-    / "core_bucket_lookup_multicatalog.csv"
-)
+CORE_LOOKUP = PROCESSED_DIR / "core_bucket_lookup.csv"
 
 RULE_REVIEW_DIR = (
     PROCESSED_DIR
@@ -66,113 +63,14 @@ def normalize_bucket_name(value: str) -> str | None:
     if "COMPONENT AREA OPTION" in text or "OPTION CORE" in text:
         return "COMPONENT_AREA_OPTION_CORE"
 
-    # Controlled historical and teaching-plan aliases.
-    # These keys exist in the catalog-year-aware core lookup.
-    if text == "PHYSICAL SCIENCE":
-        return "PHYSICAL_SCIENCE"
-
-    if text in {
-        "LIFE OR PHYSICAL SCIENCE",
-        "LIFE OR PHYSICAL SCIENCES",
-    }:
-        return "LIFE_OR_PHYSICAL_SCIENCES"
-
-    if text == "LIFE SCIENCE CORE 030":
-        return "LIFE_SCIENCE_CORE_030"
-
-    if text == "PHYSICAL SCIENCE CORE 030":
-        return "PHYSICAL_SCIENCE_CORE_030"
-
     return None
 
 
-def load_core_lookup() -> dict[tuple[str, str], set[str]]:
-    lookup = pd.read_csv(
-        CORE_LOOKUP,
-        dtype=str,
-        low_memory=False,
-    ).fillna("")
-
-    required_columns = {
-        "catalog_year",
-        "bucket_name",
-        "course_code",
-    }
-
-    missing_columns = (
-        required_columns
-        - set(lookup.columns)
-    )
-
-    if missing_columns:
-        raise ValueError(
-            "Core lookup is missing required columns: "
-            + ", ".join(
-                sorted(missing_columns)
-            )
-        )
-
-    lookup["catalog_year"] = (
-        lookup["catalog_year"]
-        .astype(str)
-        .str.strip()
-    )
-
-    lookup["bucket_name"] = (
-        lookup["bucket_name"]
-        .astype(str)
-        .str.strip()
-        .str.upper()
-    )
-
-    lookup["course_code"] = (
-        lookup["course_code"]
-        .map(normalize_course_code)
-    )
-
-    lookup = lookup[
-        lookup["catalog_year"].ne("")
-        & lookup["bucket_name"].ne("")
-        & lookup["course_code"].ne("")
-    ].copy()
-
-    duplicate_pairs = lookup.duplicated(
-        subset=[
-            "catalog_year",
-            "bucket_name",
-            "course_code",
-        ],
-        keep=False,
-    )
-
-    if duplicate_pairs.any():
-        duplicate_count = int(
-            duplicate_pairs.sum()
-        )
-
-        raise ValueError(
-            "Duplicate catalog-year/bucket/course "
-            f"lookup rows detected: {duplicate_count}"
-        )
-
+def load_core_lookup() -> dict[str, set[str]]:
+    lookup = pd.read_csv(CORE_LOOKUP)
     return {
-        (
-            str(catalog_year),
-            str(bucket_name),
-        ):
-            set(
-                group["course_code"]
-            )
-        for (
-            catalog_year,
-            bucket_name,
-        ), group in lookup.groupby(
-            [
-                "catalog_year",
-                "bucket_name",
-            ],
-            sort=False,
-        )
+        bucket: set(group["course_code"].dropna().astype(str))
+        for bucket, group in lookup.groupby("bucket_name")
     }
 
 
@@ -444,10 +342,9 @@ def latest_attempt_metadata(
 
 def audit_non_elective_requirement(
     requirement_id: str,
-    catalog_year: str,
     group: pd.DataFrame,
     available_courses: set[str],
-    core_lookup: dict[tuple[str, str], set[str]],
+    core_lookup: dict[str, set[str]],
     compound_alternatives: dict[str, list[list[str]]],
 ) -> tuple[str, list[str]]:
     normalized_available = {
@@ -477,7 +374,6 @@ def audit_non_elective_requirement(
         return "UNMET", partial_matches
 
     matched = []
-    missing_core_keys = []
 
     for _, option in group.iterrows():
         option_type = str(option["option_type"])
@@ -497,20 +393,10 @@ def audit_non_elective_requirement(
             if normalized_bucket is None:
                 continue
 
-            lookup_key = (
-                str(catalog_year),
-                str(normalized_bucket),
+            bucket_courses = core_lookup.get(
+                normalized_bucket,
+                set(),
             )
-
-            if lookup_key not in core_lookup:
-                missing_core_keys.append(
-                    lookup_key
-                )
-                continue
-
-            bucket_courses = core_lookup[
-                lookup_key
-            ]
 
             bucket_matches = sorted(
                 normalized_available.intersection(
@@ -519,12 +405,6 @@ def audit_non_elective_requirement(
             )
 
             matched.extend(bucket_matches)
-
-    if missing_core_keys:
-        return (
-            "UNRESOLVED_CORE_LOOKUP_MISSING",
-            [],
-        )
 
     required = int(group.iloc[0]["min_required"])
     matched = sorted(set(matched))
@@ -542,7 +422,7 @@ def audit_elective_requirement(
     available_courses: set[str],
     elective_rules: dict[str, dict],
     academic_course_lookup: dict[str, set[str]],
-    core_lookup: dict[tuple[str, str], set[str]],
+    core_lookup: dict[str, set[str]],
 ) -> tuple[str, list[str]]:
     rule = elective_rules.get(
         str(requirement_id)
@@ -604,27 +484,11 @@ def audit_elective_requirement(
                 "SCIENCE_ELECTIVE",
                 "USE_SCIENCE_COURSE_CROSSWALK",
             ),
-            "SCIENCE_MAJOR_ELECTIVE": (
-                "SCIENCE_ELECTIVE",
-                "USE_SCIENCE_COURSE_CROSSWALK",
-            ),
-            "CORE_AREA_ELECTIVE": (
-                "CORE_COMPONENT_ELECTIVE",
-                "USE_CORE_BUCKET_CROSSWALK",
-            ),
             "ACADEMIC_ELECTIVE": (
                 "ACADEMIC_ELECTIVE",
                 "USE_ACADEMIC_COURSE_CROSSWALK",
             ),
-            "SUBJECT_AREA_ELECTIVE": (
-                "ACADEMIC_ELECTIVE",
-                "USE_ACADEMIC_COURSE_CROSSWALK",
-            ),
             "GENERAL_ACADEMIC_ELECTIVE": (
-                "UNRESTRICTED_ELECTIVE",
-                "COUNT_UNUSED_PASSED_COURSE",
-            ),
-            "GENERAL_APPROVED_ELECTIVE": (
                 "UNRESTRICTED_ELECTIVE",
                 "COUNT_UNUSED_PASSED_COURSE",
             ),
@@ -661,14 +525,6 @@ def audit_elective_requirement(
         if translated:
             controlled_class = translated[0]
             resolution_policy = translated[1]
-
-            # The current multicatalog rule table represents the
-            # Language/Philosophy/Culture-or-Creative-Arts elective
-            # as CORE_AREA_ELECTIVE with CORE_040;CORE_050.
-            if resolver_type == "CORE_AREA_ELECTIVE":
-                controlled_scope = (
-                    "LANG_PHIL_CULTURE_OR_CREATIVE_ARTS"
-                )
 
     available_courses = {
         normalize_course_code(course_code)
@@ -841,38 +697,21 @@ def audit_elective_requirement(
                 [],
             )
 
-        required_core_keys = [
-            (
-                str(catalog_year),
-                "LANGUAGE_PHILOSOPHY_AND_CULTURE_CORE",
-            ),
-            (
-                str(catalog_year),
-                "CREATIVE_ARTS_CORE",
-            ),
-        ]
-
-        missing_core_keys = [
-            lookup_key
-            for lookup_key
-            in required_core_keys
-            if lookup_key not in core_lookup
-        ]
-
-        if missing_core_keys:
-            return (
-                "UNRESOLVED_ELECTIVE_MISSING_CORE_LOOKUP",
-                [],
-            )
-
         allowed_courses = set()
 
-        for lookup_key in required_core_keys:
-            allowed_courses.update(
-                core_lookup[
-                    lookup_key
-                ]
+        allowed_courses.update(
+            core_lookup.get(
+                "LANGUAGE_PHILOSOPHY_AND_CULTURE_CORE",
+                set(),
             )
+        )
+
+        allowed_courses.update(
+            core_lookup.get(
+                "CREATIVE_ARTS_CORE",
+                set(),
+            )
+        )
 
         matched = sorted(
             available_courses.intersection(
@@ -986,7 +825,7 @@ def audit_student_credential(
     credential_id: str,
     credential_requirements: pd.DataFrame,
     course_lookup: dict[str, dict],
-    core_lookup: dict[tuple[str, str], set[str]],
+    core_lookup: dict[str, set[str]],
     elective_rules: dict[str, dict],
     academic_course_lookup: dict[str, set[str]],
     compound_alternatives: dict[str, list[list[str]]],
@@ -1148,7 +987,6 @@ def audit_student_credential(
         else:
             status, matched = audit_non_elective_requirement(
                 requirement_id=requirement_id,
-                catalog_year=str(catalog_year),
                 group=group,
                 available_courses=available_courses,
                 core_lookup=core_lookup,
