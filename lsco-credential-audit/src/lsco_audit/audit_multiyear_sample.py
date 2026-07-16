@@ -47,6 +47,32 @@ SUMMARY_OUTPUT = PROCESSED_DIR / "multiyear_sample_credential_summary.csv"
 def normalize_bucket_name(value: str) -> str | None:
     text = str(value).upper()
 
+    # REPAIR NOTE (2026-07-16, combo-bucket repair): "X or Y" combo slots
+    # must resolve to their UNION lookup keys BEFORE the narrow
+    # single-bucket phrase checks below can fire. Previously
+    # "COMMUNICATION or COMPONENT AREA OPTION" resolved to
+    # COMMUNICATION_CORE (3 courses) instead of the 43+ course union, and
+    # abbreviated forms like "Lang, Phil, Culture OR Creative Arts"
+    # resolved to CREATIVE_ARTS_CORE (3 courses) instead of the 13-19
+    # course union. The union keys below exist in
+    # core_bucket_lookup_multicatalog.csv for all five catalog years and
+    # were built for exactly this purpose. Catalog text "X or Y" means
+    # either area satisfies the slot; this is defect correction, not a
+    # policy change. See apply_combo_bucket_repair.py for the census.
+    if " OR " in text:
+        lpc_family = (
+            "LANGUAGE" in text or "LANG" in text
+        ) and (
+            "PHILOSOPHY" in text or "PHIL" in text
+        )
+        arts_family = "CREATIVE ARTS" in text or "FINE ARTS" in text
+
+        if lpc_family and arts_family:
+            return "LANGUAGE_PHILOSOPHY_AND_CULTURE_OR_CREATIVE_ARTS"
+
+        if "COMMUNICATION" in text and "COMPONENT AREA OPTION" in text:
+            return "COMMUNICATION_OR_COMPONENT_AREA_OPTION"
+
     if "COMMUNICATION" in text:
         return "COMMUNICATION_CORE"
     if "MATH" in text:
@@ -449,6 +475,7 @@ def audit_non_elective_requirement(
     available_courses: set[str],
     core_lookup: dict[tuple[str, str], set[str]],
     compound_alternatives: dict[str, list[list[str]]],
+    used_courses: set[str] | None = None,
 ) -> tuple[str, list[str]]:
     normalized_available = {
         normalize_course_code(course_code)
@@ -531,6 +558,30 @@ def audit_non_elective_requirement(
 
     if len(matched) >= required:
         return "MET", matched[:required]
+
+    # TRIPWIRE (2026-07-16, starvation repairs): if this requirement's
+    # single COURSE option was already consumed by a sibling requirement
+    # in the same credential (one-course-one-slot allocation), say so
+    # loudly instead of reporting a bare UNMET. A single-option course
+    # requirement starving on its own course is the signature of a
+    # duplicated requirement row or a merged credential (see the
+    # Safety, Health and/,and Environment Oxford-comma collision that
+    # locked two programs at zero completions, diagnosed 2026-07-16).
+    # Completion arithmetic is unchanged: this status still counts as a
+    # missing requirement. It exists so this defect class can never
+    # again hide inside ordinary UNMET noise.
+    course_option_values = [
+        normalize_course_code(option["option_value"])
+        for _, option in group.iterrows()
+        if str(option["option_type"]).strip().upper() == "COURSE"
+    ]
+
+    if (
+        used_courses
+        and len(course_option_values) == 1
+        and course_option_values[0] in used_courses
+    ):
+        return "UNMET_CONSUMED_BY_SIBLING", matched
 
     return "UNMET", matched
 
@@ -1153,6 +1204,7 @@ def audit_student_credential(
                 available_courses=available_courses,
                 core_lookup=core_lookup,
                 compound_alternatives=compound_alternatives,
+                used_courses=used_courses,
             )
 
         if status == "MET":

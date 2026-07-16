@@ -1545,6 +1545,71 @@ def repair_ordinary_seaman_iii_merged_fourth_semester(
 
 
 
+
+
+def repair_cybersecurity_2022_duplicate_itsy_2343(
+    requirements: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Remove the duplicated ITSY 2343 row from the 2022-2023 Cybersecurity
+    Specialist Certificate of Completion.
+
+    SOURCE DEFECT (catalog typo, not an extraction error): the 2022-2023
+    catalog's Cybersecurity Specialist certificate table prints
+    "ITSY 2343 Computer System Forensics" in BOTH the First Semester and
+    Second Semester course lists. The printed semester subtotals (15 + 15)
+    and the 30-hour program total are internally consistent WITH the
+    duplicate, so the defect originates in the source document.
+
+    EVIDENCE OF INTENT: the 2023-2024 and 2024-2025 catalogs correct the
+    table -- First Semester's fifth course becomes ITNW 1313 Computer
+    Virtualization and ITSY 2343 appears once, in Second Semester. The
+    Second Semester placement is therefore treated as intended: this
+    repair keeps the LAST occurrence in document order (Second Semester)
+    and removes earlier occurrences.
+
+    USER DECISION 2026-07-16: ignore the duplicated course for the
+    2022-2023 catalog. The credential's effective requirement count drops
+    by one; the printed 30-hour program total is inherited from the source
+    typo and is NOT adjusted by this repair.
+    """
+
+    target_credential_prefix = "CYBERSECURITY_SPECIALIST"
+    target_year_token = "2022"
+    target_course = "ITSY 2343"
+
+    matching_indexes = [
+        index
+        for index, row in enumerate(requirements)
+        if target_credential_prefix in str(row.get("credential_id", ""))
+        and target_year_token in str(row.get("credential_id", ""))
+        and str(row.get("course_codes", "")).strip() == target_course
+    ]
+
+    if len(matching_indexes) <= 1:
+        return requirements
+
+    keep_index = matching_indexes[-1]
+    drop_indexes = set(matching_indexes[:-1])
+
+    repaired = []
+    for index, row in enumerate(requirements):
+        if index in drop_indexes:
+            continue
+
+        if index == keep_index:
+            row = dict(row)
+            existing_flags = str(row.get("issue_flags", "") or "").strip()
+            repair_flag = "REPAIRED_DUPLICATE_ITSY_2343_SOURCE_CATALOG_TYPO_2022"
+
+            if not existing_flags or existing_flags.lower() == "nan":
+                row["issue_flags"] = repair_flag
+            elif repair_flag not in existing_flags.split(";"):
+                row["issue_flags"] = existing_flags + ";" + repair_flag
+
+        repaired.append(row)
+
+    return repaired
+
 def repair_business_real_estate_blank_busi_2304_hours(
     requirements: list[dict[str, str]],
 ) -> list[dict[str, str]]:
@@ -2556,17 +2621,33 @@ def extract_catalog(record) -> None:
             except ValueError:
                 pass
 
+    # REPAIR NOTE (2026-07-16, starvation repairs): duplicate-title
+    # detection keys on the SLUGIFIED title, not the raw title. The
+    # 2023-2026 catalogs contain two distinct programs whose printed
+    # titles differ only by an Oxford comma:
+    #     "Safety, Health and Environment"  -- Certificate of Completion
+    #     "Safety, Health, and Environment" -- Associate of Applied Science
+    # Raw-title comparison treated them as unique, but slugify() strips
+    # punctuation, so both collapsed to SAFETY_HEALTH_AND_ENVIRONMENT_<year>,
+    # silently merging two credentials into one requirement set in which
+    # seven duplicated courses guaranteed starvation (each course consumed
+    # by one twin, leaving the other permanently UNMET) and locked both
+    # real programs at zero detected completions. Keying on the slug sends
+    # any post-slug collision through the AAS/CERT disambiguation below.
+    # User policy 2026-07-16: the CERT and AAS are DISTINCT LINEAGES and
+    # must carry distinct credential IDs end to end.
     title_counts: dict[str, int] = {}
     for row in table_map_rows:
-        title_counts[row["credential_title"]] = title_counts.get(row["credential_title"], 0) + 1
+        title_slug = slugify(row["credential_title"])
+        title_counts[title_slug] = title_counts.get(title_slug, 0) + 1
 
-    duplicate_titles = {title for title, count in title_counts.items() if count > 1}
+    duplicate_titles = {slug for slug, count in title_counts.items() if count > 1}
 
     if duplicate_titles:
         table_suffixes: dict[str, str] = {}
 
         for row in table_map_rows:
-            if row["credential_title"] not in duplicate_titles:
+            if slugify(row["credential_title"]) not in duplicate_titles:
                 continue
 
             table_index_value = row["source_table_index"]
@@ -2585,28 +2666,29 @@ def extract_catalog(record) -> None:
         # preserve uniqueness by falling back to source-table suffixes for that title.
         title_suffix_counts: dict[tuple[str, str], int] = {}
         for row in table_map_rows:
-            if row["credential_title"] not in duplicate_titles:
+            if slugify(row["credential_title"]) not in duplicate_titles:
                 continue
 
             suffix = table_suffixes.get(row["source_table_index"], f'T{int(row["source_table_index"]):03d}')
-            key = (row["credential_title"], suffix)
+            key = (slugify(row["credential_title"]), suffix)
             title_suffix_counts[key] = title_suffix_counts.get(key, 0) + 1
 
         for row_group in (all_requirements, all_totals, table_map_rows):
             for row in row_group:
-                if row["credential_title"] not in duplicate_titles:
+                if slugify(row["credential_title"]) not in duplicate_titles:
                     continue
 
                 table_index_value = row["source_table_index"]
                 suffix = table_suffixes.get(table_index_value, f'T{int(table_index_value):03d}')
 
-                if title_suffix_counts.get((row["credential_title"], suffix), 0) > 1:
+                if title_suffix_counts.get((slugify(row["credential_title"]), suffix), 0) > 1:
                     suffix = f'T{int(table_index_value):03d}'
 
                 base_id = f'{slugify(row["credential_title"])}_{suffix}_{record.catalog_year[:4]}'
                 row["credential_id"] = base_id
 
 
+    all_requirements = repair_cybersecurity_2022_duplicate_itsy_2343(all_requirements)
     all_requirements = repair_compressed_criminal_justice_stack_rows(all_requirements)
     all_requirements = repair_simple_compressed_course_stack_rows(all_requirements)
     all_requirements = repair_parenthetical_or_split_rows(all_requirements)
