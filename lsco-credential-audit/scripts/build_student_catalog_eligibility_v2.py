@@ -38,6 +38,7 @@ audited under"; the report layer picks the single countable award per
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -59,24 +60,45 @@ def catalog_start_term_sort(catalog_year: str) -> int:
     return start_year * 100 + 90
 
 
-def term_sort_to_long_ordinal(term_sort: int) -> int | None:
-    """Map LSCO six-digit Banner terms to long-semester order.
+def term_sort_to_timeline_position(term_sort: int) -> float | None:
+    """Map LSCO six-digit Banner terms to a position on the long-semester
+    timeline.
+
+    Spring of year Y sits at 2Y; Fall of year Y at 2Y + 1; Summer of
+    year Y at 2Y + 0.5 -- BETWEEN Spring and Fall of the same year.
+
+    REPAIR NOTE (2026-07-16, summer-term repair): the previous version
+    returned None for summer suffixes, which excluded summer terms from
+    segmentation entirely. That had two defects: (1) summer-only students
+    formed no segments, received no eligible catalog, and silently
+    vanished from the sweep; (2) summer STARTERS anchored to their first
+    Fall/Spring term instead of their true first term, shifting them one
+    catalog year late (a Summer 2022 start belongs to the 2021-2022
+    catalog, not 2022-2023) and suppressing catalog sets they were
+    entitled to. Summer is a real activity term for segment existence,
+    segment start, segment end, and catalog anchoring. It is neutral
+    ONLY in the missed-long-semester count: the gap between two activity
+    points is the number of INTEGER ordinals (Fall/Spring semesters)
+    strictly between their positions, so summer activity neither closes
+    a surrounding two-long-semester break nor creates one.
 
     Spring-family suffixes: 10, 13, 15
+    Summer-family suffixes: 60, 64
     Fall-family suffixes:   90, 91, 92, 95
-    Summer-family suffixes: 60, 64 and do not count as long semesters --
-    a summer-only gap is not a break, and summer activity alone does not
-    close a gap between the surrounding long semesters.
+    Unrecognized suffixes return None and are counted by the caller.
     """
     value = int(term_sort)
     year = value // 100
     suffix = value % 100
 
     if suffix in {10, 13, 15}:
-        return year * 2
+        return year * 2.0
+
+    if suffix in {60, 64}:
+        return year * 2.0 + 0.5
 
     if suffix in {90, 91, 92, 95}:
-        return year * 2 + 1
+        return year * 2.0 + 1.0
 
     return None
 
@@ -112,28 +134,39 @@ def load_catalog_years(requirements_path: Path) -> list[str]:
     return sorted(requirements["catalog_year"].dropna().astype(str).unique())
 
 
+def missed_long_semesters_between(prev_position: float, curr_position: float) -> int:
+    """Number of whole long semesters (integer ordinals: Fall/Spring)
+    strictly between two timeline positions. Summer positions are
+    half-ordinals, so summer activity contributes activity points but
+    never counts as a long semester itself."""
+    first_missed = math.floor(prev_position) + 1
+    last_missed = math.ceil(curr_position) - 1
+    return max(0, last_missed - first_missed + 1)
+
+
 def build_segments(activity_terms: list[int]) -> list[list[int]]:
     """Split a sorted, deduplicated list of term_sort values into
     continuous-enrollment segments, breaking wherever two or more
-    consecutive long semesters have zero activity in between."""
+    consecutive long semesters (Fall/Spring) have zero activity in
+    between. Summer terms are full activity points -- they create and
+    extend segments and can anchor a catalog -- but are neutral in the
+    missed-long-semester count (see term_sort_to_timeline_position)."""
     if not activity_terms:
         return []
 
-    ordinal_pairs = sorted(
-        (term_sort_to_long_ordinal(term), term)
+    position_pairs = sorted(
+        (term_sort_to_timeline_position(term), term)
         for term in activity_terms
-        if term_sort_to_long_ordinal(term) is not None
+        if term_sort_to_timeline_position(term) is not None
     )
 
-    if not ordinal_pairs:
+    if not position_pairs:
         return []
 
-    segments: list[list[int]] = [[ordinal_pairs[0][1]]]
+    segments: list[list[int]] = [[position_pairs[0][1]]]
 
-    for (prev_ordinal, _prev_term), (curr_ordinal, curr_term) in zip(ordinal_pairs, ordinal_pairs[1:]):
-        missed_long_semesters = curr_ordinal - prev_ordinal - 1
-
-        if missed_long_semesters >= 2:
+    for (prev_position, _prev_term), (curr_position, curr_term) in zip(position_pairs, position_pairs[1:]):
+        if missed_long_semesters_between(prev_position, curr_position) >= 2:
             segments.append([curr_term])
         else:
             segments[-1].append(curr_term)
