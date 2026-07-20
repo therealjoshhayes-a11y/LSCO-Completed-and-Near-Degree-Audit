@@ -240,3 +240,7 @@ review_packets/**
 # Allow explicitly curated, non-FERPA fixture files under tests.
 !tests/fixtures/**/*.csv
 !tests/fixtures/**/*.xlsx
+
+# 2026-07-16: derived data and student-level outputs -- never commit
+data/
+*_PRE_*.py
