@@ -57,17 +57,8 @@ def normalize_text(value: object) -> str:
 def derive_lineage(credential_id: object) -> str:
     """Strip only a terminal catalog-year suffix so the same credential
     across catalog years shares a lineage. Mirrors
-    build_credential_completion_report.py so lineage keys agree.
-
-    Controlled lineage override:
-        REAL_ESTATE_MANAGEMENT_2025 continues the earlier
-        BUSINESS_REAL_ESTATE_MANAGEMENT AAS lineage.
-    """
+    build_credential_completion_report.py so lineage keys agree."""
     value = normalize_text(credential_id)
-
-    if value == "REAL_ESTATE_MANAGEMENT_2025":
-        return "BUSINESS_REAL_ESTATE_MANAGEMENT"
-
     value = re.sub(r"_(2021_2022|2022_2023|2023_2024|2024_2025|2025_2026)$", "", value)
     value = re.sub(r"_(2021|2022|2023|2024|2025|2026)$", "", value)
     return value
