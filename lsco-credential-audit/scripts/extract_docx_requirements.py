@@ -18,6 +18,7 @@ COURSE_RE = re.compile(r"\b[A-Z]{3,4}\s+\d{4}\b")
 POSSIBLE_BAD_COURSE_RE = re.compile(r"\b[A-Z]{3,4}\s+\d{1,3}\b")
 CORE_CATEGORY_RE = re.compile(r"\bCORE\s+0[1-9]0\b", re.I)
 SEMESTER_RE = re.compile(r"^(First|Second|Third|Fourth|Fifth|Sixth)\s+Semester$", re.I)
+YEAR_RE = re.compile(r"^(First|Second|Third|Fourth|Fifth|Sixth)\\s+Year$", re.I)
 SESSION_LABEL_RE = re.compile(
     r"^(First|Second|Third|Fourth|Fifth|Sixth)?\s*"
     r"(Semester|Summer Session|First Summer Semester|FourthSemester)"
@@ -61,16 +62,53 @@ def parse_hours(value: str) -> list[int]:
 
 
 def is_plan_table(table: Table) -> bool:
+    """Return True only for curriculum tables supported by the generic parser.
+
+    Preserve the original two-column semester-table rule, while admitting two
+    confirmed LSCO catalog export variants:
+
+    * First/Second Year tables used by Barber and Cosmetology.
+    * A compressed First Semester table whose Credit Hours header is blank,
+      provided the table actually contains course-bearing rows.
+
+    Intentionally excluded here:
+    * multi-column/merged path tables such as Logistics Management (Maritime);
+    * First Semester (Fall) tables such as the Electromechanical AAS until
+      their separate structural/hour-stream issues are handled.
+    """
+
     if not table.rows:
         return False
 
     first_row = [clean_text(cell.text) for cell in table.rows[0].cells]
+    if not first_row:
+        return False
 
-    return (
+    if (
         len(first_row) >= 2
         and first_row[0].lower().endswith("semester")
         and first_row[1].lower() == "credit hours"
-    )
+    ):
+        return True
+
+    if (
+        len(first_row) >= 2
+        and YEAR_RE.fullmatch(first_row[0])
+        and first_row[1].lower() == "credit hours"
+    ):
+        return True
+
+    if (
+        first_row[0].lower() == "first semester"
+        and (len(first_row) < 2 or not first_row[1])
+    ):
+        return any(
+            COURSE_RE.search(clean_text(cell.text))
+            for row in table.rows[1:]
+            for cell in row.cells
+        )
+
+    return False
 
 
 def parse_rule_type(text: str) -> str:
@@ -1059,8 +1097,30 @@ def parse_plan_table(
             semester_label = first_cell
             continue
 
-        if SEMESTER_RE.match(first_cell) or SESSION_LABEL_RE.match(first_cell):
+        if (
+            SEMESTER_RE.match(first_cell)
+            or SESSION_LABEL_RE.match(first_cell)
+            or YEAR_RE.match(first_cell)
+        ):
             semester_label = first_cell
+            continue
+
+        # Barber/Cosmetology year-based tables use bare "Hours" rows as
+        # period subtotals instead of "Semester Hours".
+        if first_cell.lower() == "hours":
+            normalized_total = parse_total_row(
+                catalog_year=catalog_year,
+                credential_title=credential_title,
+                table_index=table_index,
+                row_index=row_index,
+                semester_label=semester_label,
+                cells=[
+                    "Semester Hours",
+                    cells[1] if len(cells) > 1 else "",
+                ],
+            )
+            normalized_total["raw_total_text"] = first_cell
+            total_rows.append(normalized_total)
             continue
 
         if "Semester Hours" in first_cell or "Total Program Hours" in first_cell:
