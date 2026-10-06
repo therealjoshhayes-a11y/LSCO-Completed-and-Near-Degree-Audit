@@ -18,7 +18,7 @@ COURSE_RE = re.compile(r"\b[A-Z]{3,4}\s+\d{4}\b")
 POSSIBLE_BAD_COURSE_RE = re.compile(r"\b[A-Z]{3,4}\s+\d{1,3}\b")
 CORE_CATEGORY_RE = re.compile(r"\bCORE\s+0[1-9]0\b", re.I)
 SEMESTER_RE = re.compile(r"^(First|Second|Third|Fourth|Fifth|Sixth)\s+Semester$", re.I)
-YEAR_RE = re.compile(r"^(First|Second|Third|Fourth|Fifth|Sixth)\\s+Year$", re.I)
+YEAR_RE = re.compile(r"^(First|Second|Third|Fourth|Fifth|Sixth)\s+Year$", re.I)
 SESSION_LABEL_RE = re.compile(
     r"^(First|Second|Third|Fourth|Fifth|Sixth)?\s*"
     r"(Semester|Summer Session|First Summer Semester|FourthSemester)"
