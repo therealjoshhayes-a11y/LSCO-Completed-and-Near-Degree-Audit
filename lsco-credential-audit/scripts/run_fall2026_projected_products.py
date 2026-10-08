@@ -133,7 +133,7 @@ def main():
     allowed=[]
     for year in catalog_pairs.catalog_year.unique():
         status=catalog_temporal_fields(year)
-        if status.get("conferral_temporal_eligibility","") in ("PASS","PASS_ANALYST_APPROVED_VARIANCE"):
+        if status.get("conferral_temporal_eligibility","") in ("PASS_VERIFIED_POLICY","PASS_ANALYST_APPROVED_VARIANCE"):
             allowed.append(year)
     catalog_pairs=catalog_pairs[catalog_pairs.catalog_year.isin(allowed)]
     reqgroups={(str(y),str(c)):g.copy() for (y,c),g in requirements.groupby(["catalog_year","credential_id"])}
@@ -155,7 +155,7 @@ def main():
         synthetic["grade"]="C"
         synthetic["source_dataset"]="FALL_2026_PROJECTED_C_NOT_EARNED"
         # Normalize prospective attempts through the very same engine pathway.
-        projected_raw=pd.concat([state["affected"][state["affected"].student_id.eq(sid) & ~state["affected"].term_sort.eq(refresh.FALL_2026)],synthetic])
+        projected_raw=pd.concat([state["affected"][state["affected"].student_id.eq(sid) & ~pd.to_numeric(state["affected"].term_sort,errors="coerce").eq(refresh.FALL_2026)],synthetic])
         projected=base.build_passing_course_view(projected_raw)
         info=enroll.iloc[0]
         fields=[sid,str(info.get("last_name","")),str(info.get("first_name","")),str(info.get("student_major",""))]
