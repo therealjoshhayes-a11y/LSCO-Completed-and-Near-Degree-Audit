@@ -121,7 +121,7 @@ detail = evidence[detail_cols].copy()
 detail["award_term_numeric"] = pd.to_numeric(detail["award_term"], errors="coerce")
 # Banner YYYYTT terms: only their year can be derived safely without institution-
 # specific term-code semantics. Never infer a catalog year from a grad term.
-detail["award_calendar_year"] = detail["award_term"].str.extract(r"^(\\d{4})\\d{2}$")[0].fillna("")
+detail["award_calendar_year"] = detail["award_term"].str.extract(r"^(\d{4})\d{2}$")[0].fillna("")
 detail["award_timing_relative_to_catalog"] = "TERM_FORMAT_REVIEW"
 year = pd.to_numeric(detail["award_calendar_year"], errors="coerce")
 detail.loc[year.lt(2021), "award_timing_relative_to_catalog"] = "BEFORE_2021_CALENDAR_YEAR"
@@ -148,7 +148,7 @@ cases_expanded.to_csv(expanded_case_path, index=False)
 safe = detail.groupby(["candidate_award_category", "award_timing_relative_to_catalog",
                       "identity_review_priority"], dropna=False).size().rename("official_evidence_rows").reset_index()
 safe.to_csv(safe_path, index=False)
-print("\\nHISTORICAL AWARD TIMING AND CODE-IDENTITY REVIEW")
+print("\nHISTORICAL AWARD TIMING AND CODE-IDENTITY REVIEW")
 print(safe.to_string(index=False))
 print("Distinct 2021-22 recommendations:", len(cases_expanded))
 print("Restricted exact award transactions:", expanded_path)
