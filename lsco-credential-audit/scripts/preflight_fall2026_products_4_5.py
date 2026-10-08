@@ -18,7 +18,7 @@ RAW=ROOT/"data/raw/student_exports"
 REFRESH="Summer 2026 and Fall 2026 Course Attempts_(10.5.26).xlsx"
 SHEET="202660 Course Attempts"
 OUT=ROOT/"data/processed/reporting"/("fall_2026_products_4_5_inputs_"+datetime.now().strftime("%Y%m%d_%H%M%S"))
-TERM="202660"
+TERM="202690"  # Fall 2026; 202660 is SUMMER per profile_refresh_delta.py
 GRADED={"A","B","C","D","S","P","CR"}
 NONACTIVE={"W","WF","WD","DROP","DROPPED","CANCELLED","CANCELED"}
 DETAIL_PATTERNS=("*combined*detail*.csv","*audit*detail*.csv","*requirement*detail*.csv","*near*complete*.csv","*summary*audit*.csv")
@@ -36,7 +36,10 @@ def main():
     raw=pd.read_excel(files[0],sheet_name=SHEET,dtype=str).fillna("")
     necessary={"Student_Id","Term_Code","Subject_Code","Course_Numb","Final_Grade","Section_Numb"}
     require(necessary.issubset(raw),f"Missing refresh columns: {sorted(necessary-set(raw))}")
-    fall=raw.loc[raw.Term_Code.astype(str).str.strip().eq(TERM)].copy()
+    raw["Term_Code"]=raw["Term_Code"].astype(str).str.strip()
+    observed=set(raw["Term_Code"]) - {""}
+    require(TERM in observed, f"Fall term {TERM} absent. Found terms: {sorted(observed)}")
+    fall=raw.loc[raw.Term_Code.eq(TERM)].copy()
     require(not fall.empty,"No Fall 2026 registrations found in source.")
     for field in ("Student_Id","Subject_Code","Course_Numb","Final_Grade","Section_Numb"):
         fall[field]=fall[field].astype(str).str.strip().str.upper()
