@@ -94,59 +94,55 @@ def main():
     require(not summaries.empty,"No precomputed audited combinations for Fall cohort.")
     for col in ("requirements_missing","requirements_unresolved","requirements_met"):
         if col not in summaries:summaries[col]=""
-    # Streaming detail join: DO NOT load the multi-million-row historical
-    # detail into RAM. Restrict by exact student/catalog/credential keys.
+    # Read ONLY historical per-student chunks. Never open the enormous
+    # full_actual_audit_results.csv combined file.
     wanted=set(zip(summaries.student_id,summaries.catalog_year,summaries.credential_id))
-    needed_columns=["student_id","catalog_year","credential_id","requirement_id",
+    detail_columns=["student_id","catalog_year","credential_id","requirement_id",
                     "status","path_group_id","path_selected"]
     indexed=defaultdict(list)
-    delta_keys=set()
     chunk_dir=INCREMENTAL/"chunks"
-    detail_files=sorted(chunk_dir.glob("chunk_*_detail.csv"))
-    def scan_detail(path,collect_delta=False):
-        count=0
-        with path.open("r",encoding="utf-8-sig",newline="") as stream:
-            reader=csv.DictReader(stream)
-            missing=set(needed_columns)-set(reader.fieldnames or [])
-            require(not missing,f"Saved detail missing selected-path evidence: {path} columns {sorted(missing)}")
+    delta_files=sorted(chunk_dir.glob("chunk_*_detail.csv"))
+    historical_chunks=PROCESSED/"full_actual_audit/chunks"
+    historical_summary_files=sorted(historical_chunks.glob("chunk_*_credential_summary.csv"))
+    historical_detail_files={p.name.replace("_audit_results.csv",""):
+       p for p in historical_chunks.glob("chunk_*_audit_results.csv")}
+    require(historical_summary_files or delta_files,
+            "No saved audit chunks available; refusing scan of combined detail.")
+    def key_of(row):
+        return (row["student_id"],row["catalog_year"],row["credential_id"])
+    def read_detail_chunk(path,allowed,override=None):
+        with path.open("r",encoding="utf-8-sig",newline="") as handle:
+            reader=csv.DictReader(handle)
+            missing=set(detail_columns)-set(reader.fieldnames or [])
+            require(not missing,
+                    f"Missing selected-path provenance in {path.name}: {sorted(missing)}")
             for row in reader:
-                key=(row["student_id"],row["catalog_year"],row["credential_id"])
-                if key not in wanted:continue
-                if collect_delta:delta_keys.add(key)
-                selected=(not row["path_group_id"].strip() or
-                          row["path_selected"].strip().upper()=="TRUE")
-                if not selected:continue
-                indexed[key].append({column:row[column] for column in needed_columns})
-                count+=1
-        return count
-    # Delta detail replaces all prior rows for the exact same credential key.
-    # Discover keys first so we never combine old and new allocations.
-    for path in detail_files:
-        with path.open("r",encoding="utf-8-sig",newline="") as stream:
-            reader=csv.DictReader(stream)
-            require({"student_id","catalog_year","credential_id"}.issubset(reader.fieldnames or []),
-                    f"Invalid delta detail file: {path}")
-            for row in reader:
-                key=(row["student_id"],row["catalog_year"],row["credential_id"])
-                if key in wanted:delta_keys.add(key)
-    print(f"Relevant delta credential keys: {len(delta_keys):,}",flush=True)
-    require(HIST_DETAIL.is_file() or detail_files,
-            "No saved requirement-level detail files available.")
-    if HIST_DETAIL.is_file():
-        print("Streaming saved historical requirement detail in constant-size memory...",flush=True)
-        # Historical scan excludes newer delta versions at the row source.
-        with HIST_DETAIL.open("r",encoding="utf-8-sig",newline="") as stream:
-            reader=csv.DictReader(stream)
-            missing=set(needed_columns)-set(reader.fieldnames or [])
-            require(not missing,f"Historical detail missing columns: {sorted(missing)}")
-            for row in reader:
-                key=(row["student_id"],row["catalog_year"],row["credential_id"])
-                if key not in wanted or key in delta_keys:continue
+                key=key_of(row)
+                if key not in allowed or (override is not None and key in override):
+                    continue
                 if row["path_group_id"].strip() and row["path_selected"].strip().upper()!="TRUE":
                     continue
-                indexed[key].append({column:row[column] for column in needed_columns})
-    for path in detail_files:scan_detail(path,collect_delta=False)
-    print(f"Selected-path credential keys with saved detail: {len(indexed):,}",flush=True)
+                indexed[key].append({c:row[c] for c in detail_columns})
+    # Delta precedence: identify exact keys from SMALL existing chunk summaries.
+    delta_keys=set()
+    for f in sorted(chunk_dir.glob("chunk_*_summary.csv")):
+        with f.open("r",encoding="utf-8-sig",newline="") as handle:
+            for row in csv.DictReader(handle):
+                key=key_of(row)
+                if key in wanted:delta_keys.add(key)
+    # Only attempt historic chunk reads whose matching summary contains a
+    # relevant student. This is a cheap index over 25-student files.
+    relevant_historical=[]
+    for sf in historical_summary_files:
+        with sf.open("r",encoding="utf-8-sig",newline="") as handle:
+            if any(row.get("student_id","") in cohort for row in csv.DictReader(handle)):
+                df=historical_chunks/sf.name.replace("_credential_summary.csv","_audit_results.csv")
+                require(df.is_file(),f"Missing historical detail chunk {df.name}")
+                relevant_historical.append(df)
+    print(f"Saved historical detail chunks selected: {len(relevant_historical)} of {len(historical_summary_files)}",flush=True)
+    for f in relevant_historical:read_detail_chunk(f,wanted,override=delta_keys)
+    for f in delta_files:read_detail_chunk(f,delta_keys)
+    print(f"Matched saved student/catalog/credential detail keys: {len(indexed)}",flush=True)
     req=read(REQUIREMENTS)
     defs=req.groupby(["catalog_year","credential_id","requirement_id"],sort=False).agg(
        rule_text=("option_value",lambda x:" OR ".join(dict.fromkeys(y.strip() for y in x if y.strip()))),
