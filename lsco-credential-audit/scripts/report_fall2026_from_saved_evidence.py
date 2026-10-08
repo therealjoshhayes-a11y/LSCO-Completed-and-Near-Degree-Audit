@@ -1,5 +1,5 @@
 from __future__ import annotations
-"""READ-ONLY Fall 2026 reporting from previously computed audit evidence.
+r"""READ-ONLY Fall 2026 reporting from previously computed audit evidence.
 
 No engine imports/calls, reallocation, curriculum parsing or new audits.
 Commands:
@@ -94,31 +94,59 @@ def main():
     require(not summaries.empty,"No precomputed audited combinations for Fall cohort.")
     for col in ("requirements_missing","requirements_unresolved","requirements_met"):
         if col not in summaries:summaries[col]=""
-    # Detail is mandatory for class-based reporting; missing subset is
-    # explicitly excluded, not silently treated as zero.
-    detail_files=sorted((INCREMENTAL/"chunks").glob("chunk_*_detail.csv"))
+    # Streaming detail join: DO NOT load the multi-million-row historical
+    # detail into RAM. Restrict by exact student/catalog/credential keys.
+    wanted=set(zip(summaries.student_id,summaries.catalog_year,summaries.credential_id))
+    needed_columns=["student_id","catalog_year","credential_id","requirement_id",
+                    "status","path_group_id","path_selected"]
+    indexed=defaultdict(list)
+    delta_keys=set()
+    chunk_dir=INCREMENTAL/"chunks"
+    detail_files=sorted(chunk_dir.glob("chunk_*_detail.csv"))
+    def scan_detail(path,collect_delta=False):
+        count=0
+        with path.open("r",encoding="utf-8-sig",newline="") as stream:
+            reader=csv.DictReader(stream)
+            missing=set(needed_columns)-set(reader.fieldnames or [])
+            require(not missing,f"Saved detail missing selected-path evidence: {path} columns {sorted(missing)}")
+            for row in reader:
+                key=(row["student_id"],row["catalog_year"],row["credential_id"])
+                if key not in wanted:continue
+                if collect_delta:delta_keys.add(key)
+                selected=(not row["path_group_id"].strip() or
+                          row["path_selected"].strip().upper()=="TRUE")
+                if not selected:continue
+                indexed[key].append({column:row[column] for column in needed_columns})
+                count+=1
+        return count
+    # Delta detail replaces all prior rows for the exact same credential key.
+    # Discover keys first so we never combine old and new allocations.
+    for path in detail_files:
+        with path.open("r",encoding="utf-8-sig",newline="") as stream:
+            reader=csv.DictReader(stream)
+            require({"student_id","catalog_year","credential_id"}.issubset(reader.fieldnames or []),
+                    f"Invalid delta detail file: {path}")
+            for row in reader:
+                key=(row["student_id"],row["catalog_year"],row["credential_id"])
+                if key in wanted:delta_keys.add(key)
+    print(f"Relevant delta credential keys: {len(delta_keys):,}",flush=True)
+    require(HIST_DETAIL.is_file() or detail_files,
+            "No saved requirement-level detail files available.")
     if HIST_DETAIL.is_file():
-        hist_detail=read(HIST_DETAIL)
-    else:
-        hist_detail=pd.DataFrame()
-    delta_detail=concat_csv(detail_files)
-    require(not hist_detail.empty or not delta_detail.empty,
-            "No saved requirement-level detail. Cannot infer obligations from SCH or summary counts.")
-    if not hist_detail.empty and not delta_detail.empty:
-        key=["student_id","catalog_year","credential_id"]
-        dk=delta_detail[key].drop_duplicates()
-        hist_detail=hist_detail.merge(dk.assign(_override=1),on=key,how="left")
-        hist_detail=hist_detail[hist_detail._override.isna()].drop(columns="_override")
-    detail=pd.concat([hist_detail,delta_detail],ignore_index=True)
-    detail=detail[detail.student_id.isin(cohort)].copy()
-    require({"requirement_id","status","student_id","credential_id","catalog_year"}.issubset(detail),
-            "Saved audit detail lacks required fields.")
-    if {"path_group_id","path_selected"}.issubset(detail):
-        detail=detail[(detail.path_group_id.eq("")) | detail.path_selected.str.upper().eq("TRUE")]
-    else:
-        # Historical path evidence may be unselected; do not invent an
-        # allocation in this reporting layer.
-        raise RuntimeError("Saved details have no selected-path provenance. Report held.")
+        print("Streaming saved historical requirement detail in constant-size memory...",flush=True)
+        # Historical scan excludes newer delta versions at the row source.
+        with HIST_DETAIL.open("r",encoding="utf-8-sig",newline="") as stream:
+            reader=csv.DictReader(stream)
+            missing=set(needed_columns)-set(reader.fieldnames or [])
+            require(not missing,f"Historical detail missing columns: {sorted(missing)}")
+            for row in reader:
+                key=(row["student_id"],row["catalog_year"],row["credential_id"])
+                if key not in wanted or key in delta_keys:continue
+                if row["path_group_id"].strip() and row["path_selected"].strip().upper()!="TRUE":
+                    continue
+                indexed[key].append({column:row[column] for column in needed_columns})
+    for path in detail_files:scan_detail(path,collect_delta=False)
+    print(f"Selected-path credential keys with saved detail: {len(indexed):,}",flush=True)
     req=read(REQUIREMENTS)
     defs=req.groupby(["catalog_year","credential_id","requirement_id"],sort=False).agg(
        rule_text=("option_value",lambda x:" OR ".join(dict.fromkeys(y.strip() for y in x if y.strip()))),
@@ -133,9 +161,6 @@ def main():
                 sid=(r.get("StudenID") or r.get("StudentID") or "").strip()
                 if sid not in cohort:continue
                 names.setdefault(sid,[(r.get("LastName") or ""),(r.get("FirstName") or ""),(r.get("StudentMajor") or "")])
-    indexed=defaultdict(list)
-    for row in detail.to_dict("records"):
-        indexed[(row["student_id"],row["catalog_year"],row["credential_id"])].append(row)
     desc={(x.catalog_year,x.credential_id,x.requirement_id):(x.rule_text,x.rule_kind)
           for x in defs.itertuples(index=False)}
     precompleted=[];review=[];gap_counts=Counter()
