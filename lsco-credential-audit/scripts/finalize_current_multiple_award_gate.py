@@ -38,7 +38,7 @@ import pandas as pd
 #
 # This script:
 #   * preserves the 1,108 ordinary-awardability PASS universe;
-#   * preserves 44 represented-by-official-award stops;
+#   * preserves the source-validated represented-by-official-award stops;
 #   * preserves the 4 unresolved 2021-2022 certificate-vs-IA metadata reviews;
 #   * converts BOTH certificate routes
 #         ADDITIONAL_CERTIFICATE_25_PERCENT_TEST_PENDING
@@ -63,9 +63,9 @@ ROOT = Path.cwd()
 REPORTING = ROOT / "data" / "processed" / "reporting"
 
 EXPECTED_ORDINARY_PASS = 1_108
-EXPECTED_RESCINDED_CERTIFICATE_ROUTE = 476
+EXPECTED_RESCINDED_CERTIFICATE_ROUTE = 478
 EXPECTED_SECOND_ASSOCIATE_ROUTE = 365
-EXPECTED_REPRESENTED = 44
+EXPECTED_REPRESENTED = 41
 EXPECTED_METADATA_REVIEW = 4
 
 KEY = [
