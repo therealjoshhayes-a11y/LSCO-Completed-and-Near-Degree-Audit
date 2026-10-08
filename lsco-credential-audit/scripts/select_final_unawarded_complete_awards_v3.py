@@ -1232,6 +1232,7 @@ def main() -> None:
     metrics = pd.DataFrame(
         [
             {"metric": "evaluation_date", "value": AS_OF_DATE.isoformat()},
+            {"metric": "analyst_approved_catalog_variance_recommendations", "value": int(latest["conferral_temporal_eligibility"].eq("PASS_ANALYST_APPROVED_VARIANCE").sum())},
             {"metric": "expired_academic_pass_combinations_excluded", "value": len(expired_ready)},
             {"metric": "academic_pass_combinations_pending_catalog_source", "value": len(temporal_review)},
             {
@@ -1312,6 +1313,7 @@ def main() -> None:
     print("Catalog expiration evidence: explicit published deadlines; unverifiable years withheld for review.")
     print(f"Expired historical academic PASS rows excluded: {len(expired_ready):,}")
     print(f"Catalog source REVIEW academic PASS rows withheld: {len(temporal_review):,}")
+    print(f"Analyst-approved catalog variance recommendations: {int(latest['conferral_temporal_eligibility'].eq('PASS_ANALYST_APPROVED_VARIANCE').sum()):,}")
     print("=" * 116)
     print(
         "Awardable catalog combinations before selection: "
