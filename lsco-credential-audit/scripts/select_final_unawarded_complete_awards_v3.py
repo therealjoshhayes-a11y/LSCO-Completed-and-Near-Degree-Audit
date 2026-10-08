@@ -103,6 +103,7 @@ OUT_DIR = (
 )
 
 EXPIRED_OUT = OUT_DIR / "RESTRICTED_historical_complete_expired_catalog_candidates.csv"
+TEMPORAL_REVIEW_OUT = OUT_DIR / "RESTRICTED_complete_catalog_deadline_source_reviews.csv"
 
 FINAL_OUT = (
     OUT_DIR
@@ -318,13 +319,18 @@ def main() -> None:
             if mismatch.any():
                 raise RuntimeError(f"Upstream temporal-policy disagreement in {field}: {int(mismatch.sum())} rows.")
         gate[field] = temporal[field]
-    if gate["catalog_temporal_status"].eq("CATALOG_DATE_REVIEW").any():
-        raise RuntimeError("Unresolved catalog date found; cannot finalize conferral population.")
+    # Unverified catalog dates are isolated for registrar review rather than
+    # silently treated as current or as definitively expired.
     # ready was copied before temporal fields were attached to gate. Refresh
     # from the now-annotated gate so selected rows retain the source fields.
     ready = gate.loc[ready.index].copy()
+    temporal_review = ready.loc[
+        ready["catalog_temporal_status"].eq("CATALOG_DATE_REVIEW")
+    ].copy()
+    temporal_review["historical_completion_disposition"] = "REVIEW_CATALOG_EXPIRATION_SOURCE"
+    temporal_review.to_csv(TEMPORAL_REVIEW_OUT, index=False)
     expired_ready = ready.loc[
-        gate.loc[ready.index, "catalog_temporal_status"].eq("CATALOG_EXPIRED")
+        ready["catalog_temporal_status"].eq("CATALOG_EXPIRED")
     ].copy()
     expired_ready["catalog_expiration_date"] = gate.loc[
         expired_ready.index, "catalog_expiration_date"
@@ -911,6 +917,11 @@ def main() -> None:
             na=False,
         )
     ].copy()
+    temporal_review = temporal_review.copy()
+    temporal_review["multiple_award_gate_status"] = "REVIEW_CATALOG_EXPIRATION_SOURCE"
+    reviews = pd.concat([reviews, temporal_review], ignore_index=True)
+    if reviews.duplicated(KEY).any():
+        raise RuntimeError("Temporal and ordinary review populations overlap.")
 
     # ------------------------------------------------------------------
     # Full trace: selected + superseded + all other gate outcomes.
@@ -976,6 +987,9 @@ def main() -> None:
                 "OLDER_AWARDABLE_CATALOG_VERSION_WITHIN_CANONICAL_LINEAGE"
             )
 
+        elif txt(row["catalog_temporal_status"]) == "CATALOG_DATE_REVIEW" and txt(row["multiple_award_gate_status"]) == "PASS_MULTIPLE_AWARD_GATE":
+            trace.at[index, "final_product1_selection_status"] = "REVIEW_CATALOG_EXPIRATION_SOURCE"
+            trace.at[index, "final_product1_selection_basis"] = "MISSING_VERIFIED_CATALOG_DEADLINE"
         elif txt(row["catalog_temporal_status"]) == "CATALOG_EXPIRED" and txt(row["multiple_award_gate_status"]) == "PASS_MULTIPLE_AWARD_GATE":
             trace.at[index, "final_product1_selection_status"] = "HISTORICAL_COMPLETE_CATALOG_EXPIRED"
             trace.at[index, "final_product1_selection_basis"] = "CATALOG_EXPIRED_AT_EVALUATION_DATE"
@@ -1219,6 +1233,7 @@ def main() -> None:
         [
             {"metric": "evaluation_date", "value": AS_OF_DATE.isoformat()},
             {"metric": "expired_academic_pass_combinations_excluded", "value": len(expired_ready)},
+            {"metric": "academic_pass_combinations_pending_catalog_source", "value": len(temporal_review)},
             {
                 "metric":
                     "awardable_catalog_combinations_before_lineage_selection",
@@ -1294,8 +1309,9 @@ def main() -> None:
     print("=" * 116)
     print("PRODUCT 1 — FINAL UNAWARDED-BUT-COMPLETE SELECTION")
     print(f"Evaluation date: {AS_OF_DATE.isoformat()}")
-    print("Catalog expiration evidence: 2021–22 source-documented; later years follow provisional five-year convention.")
+    print("Catalog expiration evidence: explicit published deadlines; unverifiable years withheld for review.")
     print(f"Expired historical academic PASS rows excluded: {len(expired_ready):,}")
+    print(f"Catalog source REVIEW academic PASS rows withheld: {len(temporal_review):,}")
     print("=" * 116)
     print(
         "Awardable catalog combinations before selection: "
@@ -1383,6 +1399,7 @@ def main() -> None:
     )
     print()
     print(f"EXPIRED HISTORICAL COMPLETIONS: {EXPIRED_OUT}")
+    print(f"UNVERIFIED CATALOG SOURCE REVIEWS: {TEMPORAL_REVIEW_OUT}")
     print(
         f"FINAL LIST:       {FINAL_OUT}"
     )
