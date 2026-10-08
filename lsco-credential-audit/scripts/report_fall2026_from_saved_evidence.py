@@ -75,16 +75,21 @@ def main():
     # student/catalog/credential keys; never conflate an existing COMPLETE
     # status with a Fall-projected COMPLETE status.
     require(HIST_SUMMARY.is_file(),"Missing original empirical audit summary.")
-    hist=read(HIST_SUMMARY)
-    delta_path=INCREMENTAL/"RESTRICTED_delta_credential_summary.csv"
-    delta=read(delta_path) if delta_path.is_file() else pd.DataFrame()
-    if not delta.empty:
+    current_path=INCREMENTAL/"RESTRICTED_current_eligible_empirical_credential_summary.csv"
+    if current_path.is_file():
+        summaries=read(current_path)
+        print("Using authoritative saved current empirical summary:",current_path)
+    else:
+        hist=read(HIST_SUMMARY)
+        delta_path=INCREMENTAL/"RESTRICTED_delta_credential_summary.csv"
+        require(delta_path.is_file(),
+                "Current empirical summary and incremental delta absent. Refusing stale July-only report.")
+        delta=read(delta_path)
         key=["student_id","catalog_year","credential_id"]
         hist=hist.set_index(key,drop=False)
         delta=delta.set_index(key,drop=False)
         hist=hist.loc[~hist.index.isin(delta.index)].reset_index(drop=True)
-        delta=delta.reset_index(drop=True)
-    summaries=pd.concat([hist,delta],ignore_index=True)
+        summaries=pd.concat([hist,delta.reset_index(drop=True)],ignore_index=True)
     summaries=summaries[summaries.student_id.isin(cohort)].copy()
     require(not summaries.empty,"No precomputed audited combinations for Fall cohort.")
     for col in ("requirements_missing","requirements_unresolved","requirements_met"):
