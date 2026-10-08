@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 
 import pandas as pd
@@ -51,8 +51,11 @@ ROOT = Path.cwd()
 REPORTING = ROOT / "data" / "processed" / "reporting"
 
 EXPECTED_GATE_PASS = 795
-EXPECTED_SELECTED_STUDENT_LINEAGES = 427
-EXPECTED_SUPERSEDED_AWARDABLE_ROWS = 368
+# The post-expiration recommendation counts are derived from the governed input,
+# never rebaselined from an earlier, temporally ineligible final product.
+AS_OF_DATE = date(2026, 10, 8)
+CATALOG_LIFETIME_YEARS = 5  # 2021-22 expires August 31, 2026 (prior LSCO review)
+
 
 KEY = [
     "student_id",
@@ -97,6 +100,8 @@ OUT_DIR = (
     REPORTING
     / f"final_unawarded_complete_{STAMP}"
 )
+
+EXPIRED_OUT = OUT_DIR / "RESTRICTED_historical_complete_expired_catalog_candidates.csv"
 
 FINAL_OUT = (
     OUT_DIR
@@ -296,6 +301,34 @@ def main() -> None:
             "Multiple-award PASS universe changed: "
             f"{len(ready):,} != {EXPECTED_GATE_PASS:,}"
         )
+
+    # Independent temporal conferral guard, BEFORE latest-catalog selection.
+    # Historical academic PASS is preserved, but a catalog that expired before
+    # the evaluation date is not a current award recommendation. The fixed
+    # AS_OF_DATE makes this run reproducible; update and review it for new runs.
+    gate["catalog_expiration_date"] = gate["catalog_start_year_numeric"].map(
+        lambda year: date(int(year) + CATALOG_LIFETIME_YEARS, 8, 31).isoformat()
+    )
+    gate["catalog_temporal_status"] = gate["catalog_expiration_date"].map(
+        lambda expiry: "CATALOG_EXPIRED" if expiry < AS_OF_DATE.isoformat()
+        else "CATALOG_CURRENT"
+    )
+    expired_ready = ready.loc[
+        gate.loc[ready.index, "catalog_temporal_status"].eq("CATALOG_EXPIRED")
+    ].copy()
+    expired_ready["catalog_expiration_date"] = gate.loc[
+        expired_ready.index, "catalog_expiration_date"
+    ]
+    expired_ready["catalog_temporal_status"] = "CATALOG_EXPIRED"
+    expired_ready["historical_completion_disposition"] = (
+        "ACADEMICALLY_COMPLETE_BUT_EXPIRED_NOT_CURRENTLY_CONFERABLE"
+    )
+    ready = ready.loc[
+        gate.loc[ready.index, "catalog_temporal_status"].eq("CATALOG_CURRENT")
+    ].copy()
+    expired_ready.to_csv(EXPIRED_OUT, index=False)
+    if ready.empty:
+        raise RuntimeError("No current-catalog PASS candidates remain.")
 
     # ------------------------------------------------------------------
     # Critical official-award guard:
@@ -577,12 +610,12 @@ def main() -> None:
         "same_year_canonical_alias_ids"
     ].ne("")
 
-    if len(latest) != EXPECTED_SELECTED_STUDENT_LINEAGES:
-        raise RuntimeError(
-            "Final selected student/lineage count changed: "
-            f"{len(latest):,} != "
-            f"{EXPECTED_SELECTED_STUDENT_LINEAGES:,}"
-        )
+    if latest.duplicated(LINEAGE_KEY).any():
+        raise RuntimeError("Selected multiple catalog versions for one student/lineage.")
+    if latest["catalog_start_year_numeric"].lt(
+        AS_OF_DATE.year - CATALOG_LIFETIME_YEARS
+    ).any():
+        raise RuntimeError("Expired catalog reached the selection layer.")
 
     selected_key_set = set(
         latest[
@@ -611,12 +644,8 @@ def main() -> None:
         superseded_mask
     ].copy()
 
-    if len(superseded) != EXPECTED_SUPERSEDED_AWARDABLE_ROWS:
-        raise RuntimeError(
-            "Non-selected awardable catalog count changed: "
-            f"{len(superseded):,} != "
-            f"{EXPECTED_SUPERSEDED_AWARDABLE_ROWS:,}"
-        )
+    if len(superseded) + len(latest) != len(ready):
+        raise RuntimeError("Current PASS selection does not reconcile.")
 
     selected_year_by_lineage = {
         (
@@ -939,6 +968,9 @@ def main() -> None:
                 "OLDER_AWARDABLE_CATALOG_VERSION_WITHIN_CANONICAL_LINEAGE"
             )
 
+        elif txt(row["catalog_temporal_status"]) == "CATALOG_EXPIRED" and txt(row["multiple_award_gate_status"]) == "PASS_MULTIPLE_AWARD_GATE":
+            trace.at[index, "final_product1_selection_status"] = "HISTORICAL_COMPLETE_CATALOG_EXPIRED"
+            trace.at[index, "final_product1_selection_basis"] = "CATALOG_EXPIRED_AT_EVALUATION_DATE"
         else:
             trace.at[
                 index,
@@ -1177,6 +1209,8 @@ def main() -> None:
 
     metrics = pd.DataFrame(
         [
+            {"metric": "evaluation_date", "value": AS_OF_DATE.isoformat()},
+            {"metric": "expired_academic_pass_combinations_excluded", "value": len(expired_ready)},
             {
                 "metric":
                     "awardable_catalog_combinations_before_lineage_selection",
@@ -1251,6 +1285,8 @@ def main() -> None:
 
     print("=" * 116)
     print("PRODUCT 1 — FINAL UNAWARDED-BUT-COMPLETE SELECTION")
+    print(f"Evaluation date: {AS_OF_DATE.isoformat()}")
+    print(f"Expired historical academic PASS rows excluded: {len(expired_ready):,}")
     print("=" * 116)
     print(
         "Awardable catalog combinations before selection: "
@@ -1337,6 +1373,7 @@ def main() -> None:
         "existing official award."
     )
     print()
+    print(f"EXPIRED HISTORICAL COMPLETIONS: {EXPIRED_OUT}")
     print(
         f"FINAL LIST:       {FINAL_OUT}"
     )
