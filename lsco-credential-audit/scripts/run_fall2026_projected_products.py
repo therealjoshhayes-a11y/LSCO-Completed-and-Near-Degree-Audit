@@ -229,7 +229,7 @@ def main():
     present={p.stem for p in chunks.glob("*.json")}
     expected={sid.replace("/","_") for sid in students}
     assert expected.issubset(present),"Missing chunk results; cannot publish"
-    p4=[];best={};held_students=set();held_plans=Counter()
+    p4=[];best={};provisional={};held_students=set();held_plans=Counter()
     for sid in students:
         payload=json.loads((chunks/(sid.replace("/","_")+".json")).read_text(encoding="utf-8"))
         rows=payload["plans"]
@@ -241,21 +241,28 @@ def main():
                 if r["remaining"]==0:p4.append(r)
             continue
         matches=[r for r in rows if 1<=r["remaining"]<=3]
-        if matches and sid not in held_students:
+        if matches:
             low=min(x["remaining"] for x in matches)
-            # Preserve ties, do not falsely collapse genuinely equal plans.
-            best[sid]=[r for r in matches if r["remaining"]==low]
+            ties=[r for r in matches if r["remaining"]==low]
+            if sid in held_students:
+                provisional[sid]=ties
+            else:
+                best[sid]=ties
     def layout(r):
         d=r["deficits"]
         return r["fields"][:]+[r["year"],r["credential"],r["remaining"],
             d[0][0],d[0][1],d[1][0],d[1][1],d[2][0],d[2][1],
             r["fall_courses"],"202690",r["status"]]
     near=[r for rows in best.values() for r in rows]
+    candidate_review=[r for rows in provisional.values() for r in rows]
     workbook_dir=OUT/("SMOKE_TEST_NOT_FOR_RELEASE" if smoke else "FULL_COHORT")
     make_book(workbook_dir/"RESTRICTED_Product4_Fall2026_Projected_Curriculum_Completions.xlsx",
               [layout(r) for r in p4],"New projected curricular completions")
     make_book(workbook_dir/"RESTRICTED_Product5_Fall2026_Near_Completers_1_to_3_Classes.xlsx",
               [layout(r) for r in near],"Closest curricula missing 1–3 whole classes")
+    make_book(workbook_dir/"RESTRICTED_Product5_PROVISIONAL_Candidates_Not_Ranked_For_Release.xlsx",
+              [layout(r) for r in candidate_review],"Validated candidates; other credential plans unresolved")
+    print(f"Provisional candidate plans: {len(candidate_review)} / students: {len(provisional)}")
     print(f"Product 4 plans: {len(p4)} / students: {len({r['student'] for r in p4})}")
     print(f"Product 5 plans: {len(near)} / students: {len(best)}")
     print(f"Students held from nearest-plan ranking due to unresolved options: {len(held_students)}")
