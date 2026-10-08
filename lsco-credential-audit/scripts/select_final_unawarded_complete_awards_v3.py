@@ -320,6 +320,9 @@ def main() -> None:
         gate[field] = temporal[field]
     if gate["catalog_temporal_status"].eq("CATALOG_DATE_REVIEW").any():
         raise RuntimeError("Unresolved catalog date found; cannot finalize conferral population.")
+    # ready was copied before temporal fields were attached to gate. Refresh
+    # from the now-annotated gate so selected rows retain the source fields.
+    ready = gate.loc[ready.index].copy()
     expired_ready = ready.loc[
         gate.loc[ready.index, "catalog_temporal_status"].eq("CATALOG_EXPIRED")
     ].copy()
