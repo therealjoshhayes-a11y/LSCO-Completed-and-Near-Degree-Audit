@@ -130,6 +130,11 @@ KEY = [
 # Canonical identity repairs recovered from the prior finalized local source.
 # These are not inferred here.
 CANONICAL_ALIASES = {
+    # Catalog-verified Process Technology Basic Certificate. The 2021
+    # modeled inventory previously carried this under the AAS alias; the
+    # separate Process Operating Technology credential is the actual AAS.
+    "PROCESS_TECHNOLOGY_BASIC":
+        "PROCESS_TECHNOLOGY_CERTIFICATE",
     "GENERAL_STUDIES":
         "GENERAL_STUDIES_CORE_CURRICULUM",
     "ORDINARY_SEAMAN_BASIC_SAFETY_TRAINING":
@@ -416,6 +421,17 @@ def build_candidate_metadata(
             "credential_id_norm"
         )
     )
+
+    # Preserve the established credential-ID classification across catalog
+    # versions, irrespective of historical Modeled Inventory mislabeling.
+    # Process Operating Technology AAS remains a separate credential.
+    process_cert = modeled_map["credential_id_norm"].str.fullmatch(
+        r"PROCESS_TECHNOLOGY_20(?:21|22|23|24|25|26)"
+    )
+    modeled_map.loc[
+        process_cert, "canonical_lineage_norm"
+    ] = "PROCESS_TECHNOLOGY_CERTIFICATE"
+
 
     # --------------------------------------------------------------
     # Crosswalk canonical lineage -> award category / degree code
