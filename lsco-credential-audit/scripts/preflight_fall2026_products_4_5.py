@@ -103,6 +103,17 @@ def main():
     print("Likely requirement-level source files (top 12):")
     for artifact in artifacts[:12]:
         print(" ",artifact["path"]," :: ",",".join(artifact["columns"][:15]))
+    # Report raw grade labels, including blanks, before scenario assignment.
+    # These counts are necessary to distinguish genuine Fall registrations
+    # from grades already posted or special status codes.
+    distribution=(fall.groupby(["Final_Grade","scenario_treatment"],dropna=False)
+                  .agg(student_course_rows=("Student_Id","size"),
+                       distinct_students=("Student_Id","nunique"))
+                  .reset_index()
+                  .sort_values(["student_course_rows","Final_Grade"],ascending=[False,True]))
+    distribution.to_csv(OUT/"FERPA_SAFE_FALL_2026_GRADE_CODE_DISTRIBUTION.csv",index=False)
+    print("FALL GRADE CODES AND SCENARIO TREATMENTS")
+    print(distribution.to_string(index=False))
     print("No graduation or near-completion counts calculated at this gate.")
     print("Do not count unmet SCH or raw rows as whole-class requirements.")
 
