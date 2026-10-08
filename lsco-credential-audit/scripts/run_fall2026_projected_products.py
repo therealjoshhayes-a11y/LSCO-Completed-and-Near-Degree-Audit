@@ -34,22 +34,74 @@ COLUMNS=["Banner ID","Last Name","First Name","Declared Major","Catalog Year",
  "Missing Requirement 2","Allowed Courses 2","Missing Requirement 3","Allowed Courses 3",
  "Fall Courses","Projected Term","Status / Qualification"]
 
-def options_of(row):
-    raw=str(row.get("required_options","")).strip()
-    kinds=str(row.get("option_types","")).strip().upper()
-    # A CORE_BUCKET or ELECTIVE is not a list of individual approved courses.
-    # Never imply an unexpanded category is an actual class choice.
-    if not raw or any(x in kinds for x in ("CORE_BUCKET","ELECTIVE")):
-        return None
-    choices=[x.strip() for x in raw.split(";") if x.strip()]
-    if not choices: return None
-    # Preserve exact textual course options (compound alternatives are
-    # explicitly held for manual review, not falsely counted as one class).
-    if any(" AND " in x.upper() or "+" in x or "&" in x for x in choices):
-        return None
-    if not all(re.search(r"\b[A-Z]{2,5}\s*\d{4}\b",x.upper()) for x in choices):
-        return None
-    return "; ".join(choices)
+def resolve_missing(row, requirements, support, occupied):
+    """Resolve one selected path requirement into whole-course obligations.
+
+    No SCH subtraction. A group with min_required=2 and one applied course
+    leaves one obligation; compound courses are counted independently.
+    Elective semantics are deliberately held for explicit course-hour solving.
+    """
+    rid=str(row["requirement_id"])
+    group=requirements[requirements.requirement_id.astype(str).eq(rid)]
+    if group.empty:
+        return None,"MISSING_REQUIREMENT_DEFINITION"
+    types=set(group.option_type.astype(str).str.upper().str.strip())
+    if "ELECTIVE" in types:
+        return None,"ELECTIVE_WHOLE_CLASS_SOLVER_REQUIRED"
+    alternatives=support["compound_alternatives"].get(rid,[])
+    if alternatives:
+        viable=[]
+        for alternative in alternatives:
+            courses=[base.engine.normalize_course_code(x) for x in alternative]
+            remaining=[c for c in courses if c not in occupied]
+            viable.append(remaining)
+        if not viable: return None,"COMPOUND_NO_VALID_ALTERNATIVE"
+        fewest=min(map(len,viable))
+        best=sorted(tuple(x) for x in viable if len(x)==fewest)
+        # Different minimal compound paths have different class combinations,
+        # not equivalent one-class options. Hold ambiguity for review.
+        if len(set(best))!=1:return None,"COMPOUND_ALTERNATIVES_REQUIRE_REVIEW"
+        return [(rid,course) for course in best[0]],"OK"
+    candidates=set()
+    for _,option in group.iterrows():
+        kind=str(option.option_type).upper().strip()
+        value=base.engine.normalize_course_code(option.option_value)
+        if kind=="COURSE":
+            candidates.add(value)
+        elif kind=="CORE_BUCKET":
+            bucket=base.engine.normalize_bucket_name(value)
+            if not bucket:return None,"CORE_BUCKET_UNRECOGNIZED"
+            key=(str(row["catalog_year"]),str(bucket))
+            if key not in support["core_lookup"]:
+                return None,"CORE_BUCKET_LOOKUP_MISSING"
+            candidates.update(support["core_lookup"][key])
+        else:
+            return None,"UNSUPPORTED_OPTION_TYPE_"+kind
+    candidates={x for x in candidates if x and x not in occupied}
+    if not candidates:return None,"NO_UNUSED_ALLOWED_COURSES"
+    required=int(float(group.iloc[0]["min_required"]))
+    matched={base.engine.normalize_course_code(x) for x in
+        str(row.get("matched_options","")).split(";") if x.strip()}
+    needed=max(0,required-len(matched))
+    if needed==0:
+        return None,"UNMET_BUT_NO_ADDITIONAL_COURSE_NEEDED_REVIEW"
+    # Multiple obligations in one catalog requirement cannot be counted
+    # as one merely because they share an ID.
+    return [(rid,"; ".join(sorted(candidates)))]*needed,"OK"
+
+def resolve_plan(detail, requirements, support):
+    counted=chosen(detail.to_dict("records"))
+    applied=set()
+    for text in counted.loc[counted.status.eq("MET"),"matched_options"].fillna(""):
+        applied.update(base.engine.normalize_course_code(x) for x in str(text).split(";") if x.strip())
+    needed=[]
+    for _,row in counted.loc[~counted.status.eq("MET")].iterrows():
+        if str(row.status).startswith("UNRESOLVED"):
+            return None,"ENGINE_UNRESOLVED_"+str(row.status)
+        items,reason=resolve_missing(row,requirements,support,applied)
+        if items is None:return None,reason
+        needed.extend(items)
+    return needed,"OK"
 
 def chosen(rows):
     df=pd.DataFrame(rows)
@@ -66,18 +118,6 @@ def one_audit(sid,year,cred,req,courses,support):
         compound_alternatives=support["compound_alternatives"],
         alternative_path_lookup=support["alternative_path_lookup"])
     return chosen(rows)
-
-def evaluate(df):
-    met=df.status.astype(str).eq("MET")
-    unresolved=df.status.astype(str).str.startswith("UNRESOLVED")
-    unfilled=df[~met]
-    resolvable=[]
-    for _,row in unfilled.iterrows():
-        if str(row["status"]).startswith("UNRESOLVED"):return None,"UNRESOLVED_AUDIT"
-        course_options=options_of(row)
-        if course_options is None:return None,"REQUIREMENT_OPTIONS_NOT_EXPANDED"
-        resolvable.append((str(row["requirement_id"]),course_options))
-    return resolvable,"OK"
 
 def write_sheet(wb,name,head,records):
     sh=wb.create_sheet(name);sh.append(head)
@@ -162,11 +202,13 @@ def main():
         fields=[sid,str(info.get("last_name","")),str(info.get("first_name","")),str(info.get("student_major",""))]
         fc="; ".join(sorted(set(base.normalize_course_code(x.subject,x.course_number) for x in enroll.itertuples())))
         result=[]
+        unresolved_plans=[]
         for year,cred,req in targets.get(sid,[]):
             pre=one_audit(sid,year,cred,req,earned,support)
             post=one_audit(sid,year,cred,req,projected,support)
-            deficits,reason=evaluate(post)
+            deficits,reason=resolve_plan(post,req,support)
             if deficits is None:
+                unresolved_plans.append({"year":year,"credential":cred,"reason":reason})
                 continue
             if len(deficits)>3:continue
             before_met=bool(pre.status.eq("MET").all())
@@ -180,22 +222,26 @@ def main():
                 "fields":fields,"fall_courses":fc,"deficits":padded,"status":status,
                 "note":"Projection assumes C in active Fall courses; academic governance pending"})
         tmp=out.with_suffix(".tmp")
-        tmp.write_text(json.dumps(result),encoding="utf-8")
+        tmp.write_text(json.dumps({"plans":result,"unresolved":unresolved_plans}),encoding="utf-8")
         tmp.replace(out)
         if idx%25==0:print(f"Processed {idx}/{len(students)} Fall students",flush=True)
     # Do not publish partial outputs as final.
     present={p.stem for p in chunks.glob("*.json")}
     expected={sid.replace("/","_") for sid in students}
     assert expected.issubset(present),"Missing chunk results; cannot publish"
-    p4=[];best={}
+    p4=[];best={};held_students=set();held_plans=Counter()
     for sid in students:
-        rows=json.loads((chunks/(sid.replace("/","_")+".json")).read_text(encoding="utf-8"))
+        payload=json.loads((chunks/(sid.replace("/","_")+".json")).read_text(encoding="utf-8"))
+        rows=payload["plans"]
+        if payload["unresolved"]:
+            held_students.add(sid)
+            held_plans.update(r["reason"] for r in payload["unresolved"])
         if any(r["remaining"]==0 for r in rows):
             for r in rows:
                 if r["remaining"]==0:p4.append(r)
             continue
         matches=[r for r in rows if 1<=r["remaining"]<=3]
-        if matches:
+        if matches and sid not in held_students:
             low=min(x["remaining"] for x in matches)
             # Preserve ties, do not falsely collapse genuinely equal plans.
             best[sid]=[r for r in matches if r["remaining"]==low]
@@ -212,7 +258,10 @@ def main():
               [layout(r) for r in near],"Closest curricula missing 1–3 whole classes")
     print(f"Product 4 plans: {len(p4)} / students: {len({r['student'] for r in p4})}")
     print(f"Product 5 plans: {len(near)} / students: {len(best)}")
-    print("Caution: source course choices limited to explicit COURSE options; unresolved core/elective/compound needs separate expansion.")
+    print(f"Students held from nearest-plan ranking due to unresolved options: {len(held_students)}")
+    print("Unresolved reasons:",dict(held_plans))
+    print("Whole-class counts use min_required or compound lengths; elective SCH-to-course solver is NOT implemented.")
+    print("Do not release Product 5 as complete while held students exist.")
     print("Files:",workbook_dir)
     if smoke:print("SMOKE TEST ONLY — not a full cohort release.")
 
