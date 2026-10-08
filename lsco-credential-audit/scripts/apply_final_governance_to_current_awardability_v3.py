@@ -600,6 +600,15 @@ def build_candidate_metadata(
         lineage_rows
     )
 
+    temporal_columns = [
+        "catalog_expiration_date",
+        "catalog_temporal_status",
+        "catalog_policy_evidence",
+        "conferral_temporal_eligibility",
+        "current_conferral_screen_status",
+    ]
+    # The governed candidate record carries the upstream academic/temporal
+    # distinction through every later multiple-award stage.
     result = candidates[
         KEY
         + [
@@ -607,6 +616,7 @@ def build_candidate_metadata(
             "suppression_family",
             "awardability_credential_type",
         ]
+        + [col for col in temporal_columns if col in candidates.columns]
     ].copy()
 
     result[
