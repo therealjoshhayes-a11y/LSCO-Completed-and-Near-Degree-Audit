@@ -256,11 +256,11 @@ def main():
     near=[r for rows in best.values() for r in rows]
     candidate_review=[r for rows in provisional.values() for r in rows]
     workbook_dir=OUT/("SMOKE_TEST_NOT_FOR_RELEASE" if smoke else "FULL_COHORT")
-    make_book(workbook_dir/"RESTRICTED_Product4_Fall2026_Projected_Curriculum_Completions.xlsx",
+    make_book(workbook_dir/"P4_Fall26_Projected.xlsx",
               [layout(r) for r in p4],"New projected curricular completions")
-    make_book(workbook_dir/"RESTRICTED_Product5_Fall2026_Near_Completers_1_to_3_Classes.xlsx",
+    make_book(workbook_dir/"P5_Fall26_Near.xlsx",
               [layout(r) for r in near],"Closest curricula missing 1–3 whole classes")
-    make_book(workbook_dir/"RESTRICTED_Product5_PROVISIONAL_Candidates_Not_Ranked_For_Release.xlsx",
+    make_book(workbook_dir/"P5_Fall26_Review.xlsx",
               [layout(r) for r in candidate_review],"Validated candidates; other credential plans unresolved")
     print(f"Provisional candidate plans: {len(candidate_review)} / students: {len(provisional)}")
     print(f"Product 4 plans: {len(p4)} / students: {len({r['student'] for r in p4})}")
