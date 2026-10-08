@@ -8,6 +8,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from catalog_temporal_policy import EVALUATION_DATE, catalog_temporal_fields
+
 
 # ======================================================================================
 # STEP 3 — PORT THE ESTABLISHED AWARDABILITY SCREEN TO THE CURRENT 1,410 COMBINATIONS
@@ -2677,6 +2679,29 @@ def main() -> None:
     awardability = pd.DataFrame(
         rows
     )
+
+    # Temporal validity is an independent predicate. Do NOT recategorize an
+    # academically complete historical match as an academic FAIL.
+    temporal = pd.DataFrame(
+        [catalog_temporal_fields(year) for year in awardability["catalog_year"]],
+        index=awardability.index,
+    )
+    awardability = pd.concat([awardability, temporal], axis=1)
+    awardability["current_conferral_screen_status"] = "NOT_ACADEMICALLY_PASSING"
+    passing = awardability["awardability_status"].eq(
+        "ACADEMIC_COMPLETE_ESTIMATED_AWARD_ELIGIBLE"
+    )
+    awardability.loc[passing, "current_conferral_screen_status"] = (
+        "ACADEMIC_PASS_TEMPORAL_REVIEW"
+    )
+    awardability.loc[
+        passing & awardability["catalog_temporal_status"].eq("CATALOG_EXPIRED"),
+        "current_conferral_screen_status",
+    ] = "HISTORICAL_ACADEMIC_COMPLETE_EXPIRED"
+    awardability.loc[
+        passing & awardability["catalog_temporal_status"].eq("CATALOG_CURRENT"),
+        "current_conferral_screen_status",
+    ] = "ACADEMIC_PASS_CATALOG_CURRENT"
 
     if len(
         awardability
