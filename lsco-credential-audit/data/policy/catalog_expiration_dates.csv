@@ -4,4 +4,4 @@ catalog_year,expiration_date,source_status,source_document,source_location,sourc
 2023-2024,2028-08-31,VERIFIED,LSCO 2023-2024 Catalog PDF,College Information / Effective Catalog Date (archive PDF),https://lsco.edu/programs/catalog/index.php
 2024-2025,2029-08-31,VERIFIED,LSCO 2024-2025 Catalog PDF,College Information / Effective Catalog Date (archive PDF),https://lsco.edu/programs/catalog/index.php
 2025-2026,2030-08-31,VERIFIED,LSCO 2025-2026 Catalog PDF,College Information / Effective Catalog Date (archive PDF),https://lsco.edu/programs/catalog/index.php
-2026-2027,,REVIEW_SOURCE_REQUIRED,LSCO 2026-2027 Catalog,Current catalog listed; Effective Catalog Date could not be independently inspected,https://catalog.lsco.edu/
+2026-2027,,ANALYST_APPROVED_VARIANCE,LSCO 2026-2027 Catalog,Analyst approval 2026-10-08; expiration source verification remains pending,https://catalog.lsco.edu/
