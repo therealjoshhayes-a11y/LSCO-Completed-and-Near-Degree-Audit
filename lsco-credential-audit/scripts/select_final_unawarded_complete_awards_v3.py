@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, date
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+
+from catalog_temporal_policy import EVALUATION_DATE, catalog_temporal_fields
 
 
 # ======================================================================================
@@ -53,8 +55,7 @@ REPORTING = ROOT / "data" / "processed" / "reporting"
 EXPECTED_GATE_PASS = 795
 # The post-expiration recommendation counts are derived from the governed input,
 # never rebaselined from an earlier, temporally ineligible final product.
-AS_OF_DATE = date(2026, 10, 8)
-CATALOG_LIFETIME_YEARS = 5  # 2021-22 expires August 31, 2026 (prior LSCO review)
+AS_OF_DATE = EVALUATION_DATE
 
 
 KEY = [
@@ -306,13 +307,19 @@ def main() -> None:
     # Historical academic PASS is preserved, but a catalog that expired before
     # the evaluation date is not a current award recommendation. The fixed
     # AS_OF_DATE makes this run reproducible; update and review it for new runs.
-    gate["catalog_expiration_date"] = gate["catalog_start_year_numeric"].map(
-        lambda year: date(int(year) + CATALOG_LIFETIME_YEARS, 8, 31).isoformat()
+    temporal = pd.DataFrame(
+        [catalog_temporal_fields(year) for year in gate["catalog_year"]],
+        index=gate.index,
     )
-    gate["catalog_temporal_status"] = gate["catalog_expiration_date"].map(
-        lambda expiry: "CATALOG_EXPIRED" if expiry < AS_OF_DATE.isoformat()
-        else "CATALOG_CURRENT"
-    )
+    for field in temporal.columns:
+        if field in gate.columns:
+            # Upstream metadata must agree with the independent selector guard.
+            mismatch = gate[field].astype(str).ne(temporal[field].astype(str))
+            if mismatch.any():
+                raise RuntimeError(f"Upstream temporal-policy disagreement in {field}: {int(mismatch.sum())} rows.")
+        gate[field] = temporal[field]
+    if gate["catalog_temporal_status"].eq("CATALOG_DATE_REVIEW").any():
+        raise RuntimeError("Unresolved catalog date found; cannot finalize conferral population.")
     expired_ready = ready.loc[
         gate.loc[ready.index, "catalog_temporal_status"].eq("CATALOG_EXPIRED")
     ].copy()
@@ -612,9 +619,7 @@ def main() -> None:
 
     if latest.duplicated(LINEAGE_KEY).any():
         raise RuntimeError("Selected multiple catalog versions for one student/lineage.")
-    if latest["catalog_start_year_numeric"].lt(
-        AS_OF_DATE.year - CATALOG_LIFETIME_YEARS
-    ).any():
+    if latest["catalog_temporal_status"].ne("CATALOG_CURRENT").any():
         raise RuntimeError("Expired catalog reached the selection layer.")
 
     selected_key_set = set(
@@ -1286,6 +1291,7 @@ def main() -> None:
     print("=" * 116)
     print("PRODUCT 1 — FINAL UNAWARDED-BUT-COMPLETE SELECTION")
     print(f"Evaluation date: {AS_OF_DATE.isoformat()}")
+    print("Catalog expiration evidence: 2021–22 source-documented; later years follow provisional five-year convention.")
     print(f"Expired historical academic PASS rows excluded: {len(expired_ready):,}")
     print("=" * 116)
     print(
