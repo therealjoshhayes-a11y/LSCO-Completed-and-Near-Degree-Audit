@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """
 Build a controlled overlay for the confirmed missing health-program credential-years.
 
@@ -40,6 +40,7 @@ CATALOG_PATHS = {
     "2023-2024": "data/raw/catalogs/2023-2024/2023-2024_Catalog.docx",
     "2024-2025": "data/raw/catalogs/2024-2025/2024-2025_Catalog.docx",
     "2025-2026": "data/raw/catalogs/2025-2026/2025-2026_Catalog.docx",
+    "2026-2027": "data/raw/catalogs/2026-2027/2026-2027_Catalog.docx",
 }
 
 TARGETS = {
@@ -127,6 +128,28 @@ TARGETS = {
         "credential_family": "PHYSICAL_THERAPY_ASSISTANT",
         "expected_hours": 66,
     },
+
+    # 2026-2027 Nursing headings changed to include the leading
+    # "Nursing (...)" wrapper. These target keys match normalize()
+    # output exactly; no fuzzy heading inference is permitted.
+    ("2026-2027", "nursing vocational nursing"): {
+        "credential_id": "VOCATIONAL_NURSING_CERTIFICATE_OF_COMPLETION_2026",
+        "credential_title": "Nursing (Vocational Nursing)",
+        "credential_family": "VOCATIONAL_NURSING",
+        "expected_hours": 51,
+    },
+    ("2026-2027", "nursing registered nursing transition"): {
+        "credential_id": "REGISTERED_NURSING_TRANSITION_2026",
+        "credential_title": "Nursing (Registered Nursing – Transition)",
+        "credential_family": "REGISTERED_NURSING_TRANSITION",
+        "expected_hours": 60,
+    },
+    ("2026-2027", "nursing registered nursing associate degree nursing"): {
+        "credential_id": "REGISTERED_NURSING_ASSOCIATE_DEGREE_NURSING_2026",
+        "credential_title": "Nursing (Registered Nursing - Associate Degree Nursing)",
+        "credential_family": "REGISTERED_NURSING_ADN",
+        "expected_hours": 60,
+    },
 }
 
 # Controlled audit policy confirmed during catalog review.
@@ -146,6 +169,22 @@ CONTROLLED_AUDIT_TOTALS = {
     "REGISTERED_NURSING_TRANSITION_2025": {"prerequisite_hours": 21, "auditable_hours": 39},
     "VOCATIONAL_NURSING_CERTIFICATE_OF_COMPLETION_2025": {"prerequisite_hours": 8, "auditable_hours": 43},
     "PHYSICAL_THERAPY_ASSISTANT_2025": {"prerequisite_hours": 14, "auditable_hours": 52},
+
+    # 2026-2027 controlled Nursing audit policy.
+    # Admission prerequisites remain documented source requirements
+    # but are excluded from executable credential completion logic.
+    "VOCATIONAL_NURSING_CERTIFICATE_OF_COMPLETION_2026": {
+        "prerequisite_hours": 8,
+        "auditable_hours": 43,
+    },
+    "REGISTERED_NURSING_TRANSITION_2026": {
+        "prerequisite_hours": 21,
+        "auditable_hours": 39,
+    },
+    "REGISTERED_NURSING_ASSOCIATE_DEGREE_NURSING_2026": {
+        "prerequisite_hours": 14,
+        "auditable_hours": 46,
+    },
 }
 
 

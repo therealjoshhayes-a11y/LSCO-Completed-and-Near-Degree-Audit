@@ -1123,6 +1123,22 @@ def parse_plan_table(
             total_rows.append(normalized_total)
             continue
 
+        if first_cell.lower() == "program hours":
+            total_rows.append(
+                parse_total_row(
+                    catalog_year=catalog_year,
+                    credential_title=credential_title,
+                    table_index=table_index,
+                    row_index=row_index,
+                    semester_label=semester_label,
+                    cells=[
+                        "Total Program Hours",
+                        cells[1] if len(cells) > 1 else "",
+                    ],
+                )
+            )
+            continue
+
         if "Semester Hours" in first_cell or "Total Program Hours" in first_cell:
             if COURSE_RE.search(first_cell):
                 requirement_text = re.sub(
@@ -1807,7 +1823,9 @@ def remove_massage_therapy_contact_hours_requirement(
             credential_id in {
                 "MASSAGE_THERAPY_2024",
                 "MASSAGE_THERAPY_2025",
+                "MASSAGE_THERAPY_2026",
                 "MEDICAL_OFFICE_SUPPORT_2025",
+                "MEDICAL_OFFICE_SUPPORT_2026",
             }
             and raw_text == "Total Program Contact Hours"
         ):
@@ -2618,6 +2636,302 @@ def repair_parenthetical_or_split_rows(rows: list[dict[str, str]]) -> list[dict[
 
 
 
+def repair_cosmetology_operator_source_hours(
+    rows: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Correct documented SCH inconsistencies in Cosmetology Operator tables.
+
+    In the 2025-2026 and 2026-2027 catalogs, the Cosmetology Operator
+    Certificate curriculum table displays:
+
+        CSME 2270 = 4 SCH
+        CSME 1248 = 5 SCH
+
+    The same catalogs' course descriptions define both courses as 2 SCH.
+    The credential table also displays:
+
+        First Year = 16 SCH
+        Second Year = 17 SCH
+        Total Program Hours = 33 SCH
+
+    Using 2 SCH for both courses reconciles the listed requirements exactly
+    to the displayed 17/33 totals.
+
+    raw_credit_hours_text is deliberately retained unchanged as source
+    evidence. Only the executable credit_hours value is corrected.
+    """
+
+    corrections = {
+        (
+            "2025-2026",
+            "COSMETOLOGY_OPERATOR_2025",
+            "CSME 2270",
+        ): ("4", "2"),
+        (
+            "2025-2026",
+            "COSMETOLOGY_OPERATOR_2025",
+            "CSME 1248",
+        ): ("5", "2"),
+        (
+            "2026-2027",
+            "COSMETOLOGY_OPERATOR_2026",
+            "CSME 2270",
+        ): ("4", "2"),
+        (
+            "2026-2027",
+            "COSMETOLOGY_OPERATOR_2026",
+            "CSME 1248",
+        ): ("5", "2"),
+    }
+
+    repaired = []
+
+    for row in rows:
+        new_row = dict(row)
+
+        key = (
+            new_row.get("catalog_year", ""),
+            new_row.get("credential_id", ""),
+            new_row.get("course_codes", ""),
+        )
+
+        correction = corrections.get(key)
+
+        if correction:
+            expected_source_hours, corrected_hours = correction
+            current_hours = str(new_row.get("credit_hours", "")).strip()
+
+            if current_hours != expected_source_hours:
+                raise ValueError(
+                    "Cosmetology documented correction source value changed: "
+                    f"{key}: expected {expected_source_hours} SCH, "
+                    f"found {current_hours!r}"
+                )
+
+            new_row["credit_hours"] = corrected_hours
+
+            flags = [
+                flag
+                for flag in str(new_row.get("issue_flags", "")).split(";")
+                if flag and flag.lower() != "nan"
+            ]
+            flags.append(
+                "DOCUMENTED_CATALOG_SOURCE_HOURS_CORRECTION"
+            )
+            new_row["issue_flags"] = ";".join(dict.fromkeys(flags))
+
+        repaired.append(new_row)
+
+    return repaired
+
+
+def repair_business_construction_missing_course_boundary(
+    rows: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Repair one confirmed DOCX course-boundary collapse in 2026-2027.
+
+    Source table 149, row 3 concatenates:
+
+        ... Entrepreneurship and Economic DevelopmentBUSI 1301 ...
+
+    The DOCX run structure confirms BUSI 1301 begins a new requirement.
+    Restoring the missing boundary allows the existing compressed-course
+    splitter to emit the two intended ANY_N requirements.
+    """
+
+    repaired = []
+
+    for row in rows:
+        new_row = dict(row)
+
+        is_target = (
+            new_row.get("catalog_year") == "2026-2027"
+            and new_row.get("credential_id")
+                == "BUSINESS_CONSTRUCTION_MANAGEMENT_2026"
+            and new_row.get("source_table_index") == "149"
+            and new_row.get("source_row_index") == "3"
+        )
+
+        if is_target:
+            bad = "Economic DevelopmentBUSI 1301"
+            good = "Economic Development BUSI 1301"
+
+            raw_text = str(new_row.get("raw_requirement_text", ""))
+
+            if bad not in raw_text:
+                raise ValueError(
+                    "Business Construction Management source boundary changed; "
+                    "expected confirmed DevelopmentBUSI 1301 sequence."
+                )
+
+            new_row["raw_requirement_text"] = raw_text.replace(
+                bad,
+                good,
+                1,
+            )
+
+            flags = [
+                flag
+                for flag in str(new_row.get("issue_flags", "")).split(";")
+                if flag and flag.lower() != "nan"
+            ]
+            flags.append("REPAIRED_MISSING_COURSE_BOUNDARY")
+            new_row["issue_flags"] = ";".join(dict.fromkeys(flags))
+
+        repaired.append(new_row)
+
+    return repaired
+
+
+def repair_it_cisco_two_course_paragraph_collapse(
+    rows: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Repair one confirmed two-course DOCX paragraph collapse in 2026-2027.
+
+    IT CISCO Networking/Cybersecurity Technician, table 131 row 1 contains
+    two separate DOCX paragraphs and two separate 3-SCH hour paragraphs:
+
+        ITCC 1314 CCNA 1: Introduction to Networks
+        ITSY 1342 Information Technology Security
+
+    Whole-cell extraction collapses them into one requirement. Restore the
+    two distinct EXACT requirements while retaining the original hour stream
+    as source evidence.
+    """
+
+    repaired = []
+
+    expected_text = (
+        "ITCC 1314 CCNA 1: Introduction to Networks "
+        "ITSY 1342 Information Technology Security"
+    )
+
+    for row in rows:
+        is_target = (
+            row.get("catalog_year") == "2026-2027"
+            and row.get("credential_id")
+                == "IT_CISCO_NETWORKING_CYBERSECURITY_TECHNICIAN_2026"
+            and row.get("source_table_index") == "131"
+            and row.get("source_row_index") == "1"
+        )
+
+        if not is_target:
+            repaired.append(row)
+            continue
+
+        raw_text = clean_text(str(row.get("raw_requirement_text", "")))
+        raw_hours = str(row.get("raw_credit_hours_text", "")).strip()
+
+        if raw_text != expected_text or raw_hours != "3 3":
+            raise ValueError(
+                "IT CISCO confirmed two-course source structure changed: "
+                f"text={raw_text!r}, hours={raw_hours!r}"
+            )
+
+        try:
+            base_sequence = int(float(row.get("requirement_sequence", "0")))
+        except (TypeError, ValueError):
+            base_sequence = 0
+
+        fragments = [
+            (
+                "ITCC 1314 CCNA 1: Introduction to Networks",
+                "ITCC 1314",
+            ),
+            (
+                "ITSY 1342 Information Technology Security",
+                "ITSY 1342",
+            ),
+        ]
+
+        for offset, (requirement_text, course_code) in enumerate(
+            fragments,
+            start=1,
+        ):
+            new_row = dict(row)
+            new_row["requirement_sequence"] = (
+                f"{base_sequence}.{offset}"
+            )
+            new_row["raw_requirement_text"] = requirement_text
+            new_row["credit_hours"] = "3"
+            new_row["rule_type"] = "EXACT"
+            new_row["course_codes"] = course_code
+
+            flags = [
+                flag
+                for flag in str(new_row.get("issue_flags", "")).split(";")
+                if flag and flag.lower() != "nan"
+            ]
+            flags.append(
+                "REPAIRED_TWO_COURSE_PARAGRAPH_COLLAPSE"
+            )
+            new_row["issue_flags"] = ";".join(dict.fromkeys(flags))
+
+            repaired.append(new_row)
+
+    return repaired
+
+
+def repair_robotics_aas_rbtc_2445_missing_hours(
+    rows: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Repair one documented blank SCH cell in the 2026-2027 catalog.
+
+    Robotics and Automation AAS, table 97 row 16 lists RBTC 2445 with
+    a blank credit-hour cell.
+
+    Other 2026-2027 curriculum tables list RBTC 2445 as 4 SCH, and the
+    affected semester declares 14 SCH while its other requirements total
+    10 SCH. Preserve the blank raw source value and set only the executable
+    credit_hours value to 4.
+    """
+
+    repaired = []
+
+    for row in rows:
+        new_row = dict(row)
+
+        is_target = (
+            new_row.get("catalog_year") == "2026-2027"
+            and new_row.get("credential_id")
+                == "ROBOTICS_AND_AUTOMATION_AAS_2026"
+            and new_row.get("source_table_index") == "97"
+            and new_row.get("source_row_index") == "16"
+            and new_row.get("course_codes") == "RBTC 2445"
+        )
+
+        if is_target:
+            current_hours = str(
+                new_row.get("credit_hours", "")
+            ).strip()
+            raw_hours = str(
+                new_row.get("raw_credit_hours_text", "")
+            ).strip()
+
+            if current_hours or raw_hours:
+                raise ValueError(
+                    "Robotics AAS RBTC 2445 source value changed; "
+                    f"credit_hours={current_hours!r}, "
+                    f"raw_credit_hours_text={raw_hours!r}"
+                )
+
+            new_row["credit_hours"] = "4"
+
+            flags = [
+                flag
+                for flag in str(new_row.get("issue_flags", "")).split(";")
+                if flag and flag.lower() != "nan"
+            ]
+            flags.append(
+                "DOCUMENTED_CATALOG_SOURCE_HOURS_OMISSION"
+            )
+            new_row["issue_flags"] = ";".join(dict.fromkeys(flags))
+
+        repaired.append(new_row)
+
+    return repaired
+
+
 def extract_catalog(record) -> None:
     doc = Document(record.source_docx_path)
 
@@ -2750,7 +3064,10 @@ def extract_catalog(record) -> None:
 
     all_requirements = repair_cybersecurity_2022_duplicate_itsy_2343(all_requirements)
     all_requirements = repair_compressed_criminal_justice_stack_rows(all_requirements)
+    all_requirements = repair_business_construction_missing_course_boundary(all_requirements)
+    all_requirements = repair_it_cisco_two_course_paragraph_collapse(all_requirements)
     all_requirements = repair_simple_compressed_course_stack_rows(all_requirements)
+    all_requirements = repair_robotics_aas_rbtc_2445_missing_hours(all_requirements)
     all_requirements = repair_parenthetical_or_split_rows(all_requirements)
     all_requirements = repair_adjacent_elective_option_rows(all_requirements)
     all_requirements, all_totals = repair_repeated_semester_total_labels(all_requirements, all_totals)
@@ -2764,6 +3081,7 @@ def extract_catalog(record) -> None:
     all_totals = repair_liberal_arts_2021_fourth_semester_total(all_totals)
     all_totals = repair_compact_total_row_semester_hours(all_totals)
     all_requirements = synthesize_requirements_from_compact_total_rows(all_requirements, all_totals)
+    all_requirements = repair_cosmetology_operator_source_hours(all_requirements)
 
     out_dir = Path("data") / "processed" / "catalogs" / record.catalog_year
 

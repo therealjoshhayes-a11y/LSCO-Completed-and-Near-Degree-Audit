@@ -170,6 +170,22 @@ def classify_validation_row(row):
         )
 
     if (
+        status == "SEMESTER_TOTAL_MISMATCH"
+        and level == "SEMESTER"
+        and credential_id == "COURT_REPORTING_CERTIFICATE_OF_COMPLETION_2026"
+        and row.get("semester_label", "") == "First Semester"
+        and parsed_hours == 11.0
+        and expected_hours == 12.0
+    ):
+        return (
+            "OK_DOCUMENTED_CATALOG_SEMESTER_TOTAL_CORRECTION",
+            "Published 2026-2027 catalog displays 12 semester hours, but the four "
+            "listed courses total 11 SCH. The published program total remains 42 "
+            "SCH and matches the sum of all listed course requirements; retain the "
+            "listed course hours.",
+        )
+
+    if (
         status == "NO_SEMESTER_TOTAL"
         and level == "SEMESTER"
         and expected_hours is None
