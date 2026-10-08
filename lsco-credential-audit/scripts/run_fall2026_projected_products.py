@@ -28,7 +28,7 @@ import run_fall_2026_incremental_audit as base
 import profile_refresh_delta as refresh
 from catalog_temporal_policy import catalog_temporal_fields, EVALUATION_DATE
 
-OUT=ROOT/"data/processed/reporting/fall2026_projected_products"
+OUT=ROOT/"data/processed/reporting/fall2026_projected_products_v2"
 COLUMNS=["Banner ID","Last Name","First Name","Declared Major","Catalog Year",
  "Credential ID","Whole Classes Remaining","Missing Requirement 1","Allowed Courses 1",
  "Missing Requirement 2","Allowed Courses 2","Missing Requirement 3","Allowed Courses 3",
@@ -47,7 +47,7 @@ def options_of(row):
     # explicitly held for manual review, not falsely counted as one class).
     if any(" AND " in x.upper() or "+" in x or "&" in x for x in choices):
         return None
-    if not all(re.search(r"\\b[A-Z]{2,5}\\s*\\d{4}\\b",x.upper()) for x in choices):
+    if not all(re.search(r"\b[A-Z]{2,5}\s*\d{4}\b",x.upper()) for x in choices):
         return None
     return "; ".join(choices)
 
@@ -143,6 +143,7 @@ def main():
     passing=base.build_passing_course_view(state["affected"])
     students=sorted(fall_ids)
     if args.limit_students is not None:students=students[:args.limit_students]
+    smoke=args.limit_students is not None
     OUT.mkdir(parents=True,exist_ok=True)
     chunks=OUT/"student_chunks";chunks.mkdir(exist_ok=True)
     print(f"Fall cohort: {len(fall_ids)}; eligible target pairs: {sum(len(v) for v in targets.values())}",flush=True)
@@ -204,13 +205,15 @@ def main():
             d[0][0],d[0][1],d[1][0],d[1][1],d[2][0],d[2][1],
             r["fall_courses"],"202690",r["status"]]
     near=[r for rows in best.values() for r in rows]
-    make_book(OUT/"RESTRICTED_Product4_Fall2026_Projected_Curriculum_Completions.xlsx",
+    workbook_dir=OUT/("SMOKE_TEST_NOT_FOR_RELEASE" if smoke else "FULL_COHORT")
+    make_book(workbook_dir/"RESTRICTED_Product4_Fall2026_Projected_Curriculum_Completions.xlsx",
               [layout(r) for r in p4],"New projected curricular completions")
-    make_book(OUT/"RESTRICTED_Product5_Fall2026_Near_Completers_1_to_3_Classes.xlsx",
+    make_book(workbook_dir/"RESTRICTED_Product5_Fall2026_Near_Completers_1_to_3_Classes.xlsx",
               [layout(r) for r in near],"Closest curricula missing 1–3 whole classes")
     print(f"Product 4 plans: {len(p4)} / students: {len({r['student'] for r in p4})}")
     print(f"Product 5 plans: {len(near)} / students: {len(best)}")
     print("Caution: source course choices limited to explicit COURSE options; unresolved core/elective/compound needs separate expansion.")
-    print("Files:",OUT)
+    print("Files:",workbook_dir)
+    if smoke:print("SMOKE TEST ONLY — not a full cohort release.")
 
 if __name__=="__main__":main()
