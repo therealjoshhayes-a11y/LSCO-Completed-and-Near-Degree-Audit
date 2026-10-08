@@ -711,6 +711,20 @@ def build_candidate_metadata(
         "candidate_lineage_basis",
     ] = "SUPPRESSION_FAMILY_FALLBACK_REQUIRES_GOVERNANCE"
 
+    # The historical Modeled Inventory does not contain every later catalog
+    # credential ID. Normalize the catalog-verified Process Technology Basic
+    # Certificate AFTER both fallback paths, so all versions share one award
+    # identity. Do not touch PROCESS_OPERATING_TECHNOLOGY_* (the separate AAS).
+    process_certificate_ids = result["credential_id_norm"].str.fullmatch(
+        r"PROCESS_TECHNOLOGY_20(?:21|22|23|24|25|26)"
+    )
+    result.loc[
+        process_certificate_ids, "candidate_lineage"
+    ] = "PROCESS_TECHNOLOGY_CERTIFICATE"
+    result.loc[
+        process_certificate_ids, "candidate_lineage_basis"
+    ] = "CATALOG_VERIFIED_PROCESS_TECHNOLOGY_BASIC_CERTIFICATE"
+
     result = result.merge(
         lineage_metadata,
         on="candidate_lineage",
