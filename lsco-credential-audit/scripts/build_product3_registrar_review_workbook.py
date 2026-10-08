@@ -118,9 +118,6 @@ def add_sheet(wb, name, headers, data, widths=None):
 def main():
     source=chosen_output()
     awards=read_rows(source/FINAL)
-    expired=read_rows(source/EXPIRED)
-    reviews=read_rows(source/REVIEWS)
-    trace=read_rows(source/TRACE)
     if not awards: fail("Final awards file is empty.")
     ids=[val(x,"student_id") for x in awards]
     if any(not x for x in ids): fail("Final recommendation missing student_id.")
@@ -128,11 +125,8 @@ def main():
         fail("Student+lineage must be unique in the final recommendation list.")
     if any(val(x,"catalog_year")=="2021-2022" for x in awards):
         fail("Expired 2021-2022 recommendations detected: refusing workbook release.")
-    if len(awards)!=367 or len(set(ids))!=326 or len(expired)!=117:
-        fail(f"Unexpected release population: {len(awards)} awards, {len(set(ids))} students, {len(expired)} expired. Verify baseline first.")
-    coll={val(x,"final_product1_selection_status") for x in trace}
-    if "HISTORICAL_COMPLETE_CATALOG_EXPIRED" not in coll:
-        fail("Selection trace does not document catalog expiration.")
+    if len(awards)!=367 or len(set(ids))!=326:
+        fail(f"Unexpected release population: {len(awards)} awards and {len(set(ids))} students. Verify baseline first.")
     variance=sum(1 for x in awards if val(x,"conferral_temporal_eligibility")=="PASS_ANALYST_APPROVED_VARIANCE")
     # Fail closed if variance metadata never propagated; all selected 2026-27
     # rows must carry the explicit analyst-approved flag.
@@ -141,129 +135,76 @@ def main():
         fail("2026-2027 records missing analyst-approved variance designation.")
     if len(modern)!=variance: fail("Variance count mismatch.")
 
-    identities=identity_lookup(set(ids)|{val(x,"student_id") for x in reviews if val(x,"student_id")})
+    identities=identity_lookup(set(ids))
     wb=Workbook()
     overview=wb.active
-    overview.title="RELEASE SUMMARY"
-    rows=[
-      ["LAMAR STATE COLLEGE ORANGE • PRODUCT 3",""],
-      ["Unawarded-but-complete credential review",""],
-      ["Evaluation date","2026-10-08"],
-      ["Release classification","RESTRICTED • FERPA • Institutional review only"],
-      ["Source selector directory",str(source)],
-      ["Academic-complete recommendations",len(awards)],
-      ["Distinct students",len(set(ids))],
-      ["Certificate recommendations",sum(val(a,"candidate_award_category")=="CERTIFICATE" for a in awards)],
-      ["Associate recommendations",sum(val(a,"candidate_award_category")=="ASSOCIATE" for a in awards)],
-      ["Expired historical PASS combinations retained",len(expired)],
-      ["Unresolved ordinary/multiple-award reviews",len(reviews)],
-      ["Recommendations under analyst-approved catalog variance",variance],
-      ["2026–2027 catalog source verification","OUTSTANDING — variance is NOT a verified deadline"],
-      ["Action required","Registrar must verify individual awards before conferral"],
-      ["Release approval","PENDING REGISTRAR REVIEW"],
-      ["Source timestamp",datetime.now().strftime("%Y-%m-%d %H:%M")],
+    overview.title="CONTROL SUMMARY"
+    catalog_counts=Counter(val(x,"catalog_year") for x in awards)
+    summary=[
+        ["LAMAR STATE COLLEGE ORANGE — UNAWARDED COMPLETE RECOMMENDATIONS",""],
+        ["Product 3 • Registrar operational report • October 8, 2026",""],
+        ["Recommended awards",len(awards)],
+        ["Distinct students",len(set(ids))],
+        ["Certificates",sum(val(x,"candidate_award_category")=="CERTIFICATE" for x in awards)],
+        ["Associate degrees",sum(val(x,"candidate_award_category")=="ASSOCIATE" for x in awards)],
+        ["2026–2027 analyst-approved variance",variance],
+        ["2026–2027 expiration source","Confirmation pending; analyst-approved variance"],
+        ["Scope","ONLY final recommended awards; no incomplete/review/expired populations"],
+        ["Conferral","Subject to Registrar verification"],
+        ["Source",str(source/FINAL)],
+        ["Catalog","Recommendations"],
     ]
-    for row in rows: overview.append(row)
-    overview.column_dimensions["A"].width=55
+    summary.extend([[year,n] for year,n in sorted(catalog_counts.items())])
+    for rec in summary: overview.append(rec)
+    overview.column_dimensions["A"].width=70
     overview.column_dimensions["B"].width=90
     overview.freeze_panes="A3"
     overview.sheet_view.showGridLines=False
-    for i in range(1,17):
-        overview.row_dimensions[i].height=28
-        ac=overview.cell(i,1);bc=overview.cell(i,2)
-        ac.font=Font(name="Aptos",bold=True,color=WHITE.lstrip("#") if i<=2 else INK.lstrip("#"))
-        ac.fill=PatternFill("solid",fgColor=GREEN.lstrip("#") if i<=2 else PALE.lstrip("#"))
-        bc.alignment=Alignment(wrap_text=True,vertical="center")
-        if i<=2: bc.fill=PatternFill("solid",fgColor=GREEN.lstrip("#"))
-        if 13<=i<=15:
-            bc.fill=PatternFill("solid",fgColor=GOLD.lstrip("#"))
-            bc.font=Font(name="Aptos",bold=True,color=INK.lstrip("#"))
+    for row in overview.iter_rows():
+        for cell in row:
+            cell.alignment=Alignment(vertical="center",wrap_text=True)
+        if row[0].row in (1,2,12):
+            for cell in row:
+                cell.fill=PatternFill("solid",fgColor=GREEN.lstrip("#"))
+                cell.font=Font(name="Aptos",size=11,bold=True,color="FFFFFF")
+        else:
+            row[0].fill=PatternFill("solid",fgColor=PALE.lstrip("#"))
+            row[0].font=Font(name="Aptos",bold=True,color=INK.lstrip("#"))
+        overview.row_dimensions[row[0].row].height=29
 
-    roster_headers=[
-        "Banner ID","Last Name","First Name","Middle Initial","Declared Major",
-        "Unawarded Credential","Credential Level","Catalog Year","Modeled Completion Term",
-        "Credential ID","Canonical Lineage","Program Hours","Applied SCH","Resident SCH",
-        "Resident SCH Required","Institutional GPA","Plan GPA","Minimum C Status",
-        "Official Award / Multiple Award Gate","Temporal Authorization","Catalog Deadline",
-        "Analyst Variance Disclosure","Registrar Decision","Reviewer Notes","Verified By","Verification Date"]
-    roster=[]
-    completion_missing=0
-    for a in awards:
-        temporal=val(a,"conferral_temporal_eligibility")
-        sid=val(a,"student_id")
-        identity=identities[sid]
-        completion=val(a,"award_term_taken","modeled_completion_term","completion_term","completion_term_taken","award_term")
-        if not completion: completion_missing+=1
-        roster.append([sid,identity["last"],identity["first"],identity["middle"],identity["major"],
-            val(a,"credential_title","awardability_credential_title"),val(a,"candidate_award_category"),
-            val(a,"catalog_year"),completion,val(a,"credential_id"),val(a,"candidate_lineage"),
-            val(a,"awardability_program_hours"),val(a,"applied_program_hours"),
-            val(a,"estimated_resident_applied_hours"),val(a,"required_resident_hours"),
-            val(a,"estimated_institutional_gpa"),val(a,"estimated_certificate_plan_gpa"),
-            val(a,"minimum_c_status"),val(a,"multiple_award_gate_status"),temporal,
-            val(a,"catalog_expiration_date"),
-            "2026-27 SOURCE PENDING • ANALYST APPROVED" if temporal=="PASS_ANALYST_APPROVED_VARIANCE" else "",
-            "PENDING","","",""])
-    roster.sort(key=lambda x:(x[1].upper(),x[2].upper(),x[0],x[7],x[9]))
-    sheet=add_sheet(wb,"AWARD ROSTER",roster_headers,roster,
-       [18,21,19,17,24,39,19,17,23,33,35,15,15,15,19,17,17,19,29,29,19,43,20,37,19,20])
-    if roster:
-        dv=DataValidation(type="list",formula1='"PENDING,APPROVE,HOLD,REJECT,FOLLOW UP"',allow_blank=False)
-        dv.error="Select a review disposition."
-        dv.showErrorMessage=True
-        sheet.add_data_validation(dv)
-        dv.add(f"W2:W{len(roster)+1}")
-    review_headers=["Banner ID","Last Name","First Name","Declared Major","Catalog",
-        "Credential","Credential ID","Review Status","Review Reason","Reviewer Decision","Reviewer Notes"]
-    review_data=[]
-    for x in reviews:
-        sid=val(x,"student_id")
-        info=identities.get(sid,{})
-        review_data.append([sid,info.get("last",""),info.get("first",""),info.get("major",""),
-            val(x,"catalog_year"),val(x,"credential_title","awardability_credential_title"),
-            val(x,"credential_id"),val(x,"multiple_award_gate_status"),
-            val(x,"multiple_award_gate_reason"),"PENDING",""])
-    add_sheet(wb,"HUMAN REVIEW",review_headers,review_data,
-        [18,20,19,24,17,38,35,34,50,23,38])
-    exp_headers=["Banner ID","Catalog","Credential ID","Canonical Lineage","Award Category",
-                 "Temporal Status","Catalog Deadline","Disposition"]
-    exp_data=[[val(x,"student_id"),val(x,"catalog_year"),val(x,"credential_id"),
-        val(x,"candidate_lineage"),val(x,"candidate_award_category"),
-        val(x,"catalog_temporal_status"),val(x,"catalog_expiration_date"),
-        val(x,"historical_completion_disposition")] for x in expired]
-    add_sheet(wb,"EXPIRED HISTORY",exp_headers,exp_data,[18,16,35,38,18,22,20,57])
-    add_sheet(wb,"METHODOLOGY",["Control / Rule","Method / Source","Disposition"],[
-        ["Identity and declared major","Local Banner course history; latest nonblank StudentMajor by Term","Local enrichment"],
-        ["Curriculum completion","Previously validated six-year multi-catalog requirements engine","No rerun by this builder"],
-        ["Awardability","Residency, GPA, minimum C, applied SCH and grades from ordinary awardability","Upstream assessment"],
-        ["Prior official awards","Curated three-code official award crosswalk and governance gate","Upstream assessment"],
-        ["Multiple awards","Separate second-associate and certificate governance checks","Upstream assessment"],
-        ["Catalog expiration","Published catalog-expiration date table; 2021-22 expired Aug 31 2026","117 excluded at selector"],
-        ["2026-27 variance","Analyst approved 2026-10-08; expiration source verification outstanding","Analytical inclusion only"],
-        ["Academic completion term","Copied from selected source when present; not inferred","Missing: "+str(completion_missing)],
-        ["Evaluation date","2026-10-08","Fixed reproducible as-of"],
-        ["Release decision","Individual registrar approval required; no automatic conferral","Pending review"],
-        ["FERPA","Workbook contains student identifiers; authorized institutional distribution only","Restricted"],
-        ["Selection source",str(source),"Trace retained in output directory"],
-    ],[36,95,34])
-    count=Counter((val(a,"catalog_year"),val(a,"candidate_award_category")) for a in awards)
-    bycat=[[catalog,category,n] for (catalog,category),n in sorted(count.items())]
-    add_sheet(wb,"COUNTS BY CATALOG",["Catalog","Award Category","Recommendations"],bycat,[20,24,25])
-    add_sheet(wb,"RELEASE CHECKS",["Check","Finding","Disposition"],[
-      ["Final roster",f"{len(awards)} recommendations; {len(set(ids))} unique students","PASS"],
-      ["2021-22 catalog","No 2021–2022 recommendations in final roster","PASS"],
-      ["Expired candidates",f"{len(expired)} preserved outside release roster","PASS"],
-      ["2026-27 analyst variance",f"{variance} recommendation(s) explicitly flagged","APPROVED FOR ANALYTICAL REVIEW"],
-      ["2026-27 catalog expiration source","Not independently verified","OPEN SOURCE UPDATE"],
-      ["Registrar conferment authority","Not conferred by audit alone","REVIEW REQUIRED"],
-      ["Privacy","Contains restricted student record identifiers","INTERNAL ONLY"],
-    ],[38,75,34])
-
+    # Restore the original operational report's compact student-facing columns.
+    headers=["Banner ID","Last Name","First Name","Middle Initial","Declared Major",
+             "Unawarded Credential","Credential Level","Catalog Year",
+             "Modeled Completion Term","Registrar Disposition","Registrar Notes"]
+    by_year={}
+    missing_completion=0
+    for award in awards:
+        sid=val(award,"student_id")
+        info=identities[sid]
+        completion=val(award,"award_term_taken","modeled_completion_term",
+                       "completion_term","completion_term_taken","award_term")
+        if not completion: missing_completion+=1
+        year=val(award,"catalog_year")
+        by_year.setdefault(year,[]).append([
+            sid,info["last"],info["first"],info["middle"],info["major"],
+            val(award,"credential_title","awardability_credential_title"),
+            val(award,"candidate_award_category"),year,completion,"",""
+        ])
+    for year in sorted(by_year):
+        data=sorted(by_year[year],key=lambda row:(row[5].upper(),row[1].upper(),row[2].upper(),row[0]))
+        sheet=add_sheet(wb,year,headers,data,[18,22,20,16,27,46,20,17,25,23,45])
+        dropdown=DataValidation(type="list",formula1='"APPROVE,HOLD,REJECT,FOLLOW UP"',allow_blank=True)
+        sheet.add_data_validation(dropdown)
+        dropdown.add(f"J2:J{len(data)+1}")
+    if sum(len(data) for data in by_year.values()) != len(awards):
+        fail("Catalog tab population does not reconcile to recommended awards.")
     output=source/"RESTRICTED_LSCO_Product3_Registrar_Review_20261008.xlsx"
     wb.save(output)
     check=load_workbook(output,read_only=True,data_only=True)
-    if check["AWARD ROSTER"].max_row != len(awards)+1:
-        fail("Export verification failed: award roster row count mismatch.")
+    if set(check.sheetnames) != {"CONTROL SUMMARY",*by_year.keys()}:
+        fail("Unexpected worksheet detected in operational release.")
+    if sum(check[year].max_row-1 for year in by_year)!=len(awards):
+        fail("Export verification failed: catalog tabs do not sum to final recommendations.")
     check.close()
     if not output.is_file() or output.stat().st_size<5000:
         fail("Workbook export did not produce a valid-size file.")
@@ -271,8 +212,8 @@ def main():
     print(f"Workbook: {output}")
     print(f"Students: {len(set(ids))}; Recommendations: {len(awards)}")
     print(f"Identity and major enriched: {len(set(ids))} students")
-    print(f"Modeled completion term unavailable in final source: {completion_missing} recommendations")
-    print(f"Expired excluded: {len(expired)}; Open reviews: {len(reviews)}")
+    print(f"Modeled completion term unavailable in final source: {missing_completion} recommendations")
+    print("Only final recommended awards exported; no expired or human-review records.")
     print(f"Analyst-approved 2026-27 variance recommendations: {variance}")
     print("Release status: PENDING REGISTRAR REVIEW; FERPA RESTRICTED.")
 
