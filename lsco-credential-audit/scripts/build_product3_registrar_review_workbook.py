@@ -2,14 +2,17 @@ from __future__ import annotations
 """Build the LSCO restricted Product 3 registrar review workbook locally.
 
 Run from lsco-credential-audit root. Never upload generated student-level data.
-Requires: pip install artifact-tool
+Requires: pip install openpyxl
 """
 import csv
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 
-from artifact_tool import Workbook, SpreadsheetFile
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import PatternFill, Font, Alignment
+from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.utils import get_column_letter
 
 ROOT = Path.cwd()
 REPORTING = ROOT / "data/processed/reporting"
@@ -50,33 +53,25 @@ def chosen_output():
     return dirs[0]
 
 def add_sheet(wb, name, headers, data, widths=None):
-    sh = wb.worksheets.add(name)
-    n = len(headers)
-    last = max(1, len(data) + 1)
-    sh.get_range_by_indexes(0, 0, len(data)+1, n).values = [headers] + data
-    sh.get_range_by_indexes(0, 0, 1, n).format = {
-        "fill": GREEN, "font": {"bold": True, "color": WHITE},
-        "row_height": 31, "wrap_text": True,
-        "vertical_alignment": "center",
-    }
-    sh.freeze_panes.freeze_rows(1)
-    for j, width in enumerate(widths or [21]*n):
-        sh.get_range_by_indexes(0, j, last, 1).format.column_width = width
-    if data:
-        sh.get_range_by_indexes(1, 0, len(data), n).format.row_height = 21
-        # Filterable release sheets.
-        try:
-            sh.tables.add(f"A1:{excelcol(n)}{last}", True, "LSCO_" + name.replace(" ","").replace("-","")[:20])
-        except Exception as exc:
-            print(f"Table formatting unavailable for {name}: {exc}")
+    sh=wb.create_sheet(name)
+    sh.append(headers)
+    for record in data: sh.append(record)
+    sh.freeze_panes="A2"
+    sh.auto_filter.ref=f"A1:{get_column_letter(len(headers))}{len(data)+1}"
+    for cell in sh[1]:
+        cell.fill=PatternFill("solid",fgColor=GREEN.lstrip("#"))
+        cell.font=Font(name="Aptos",size=10,bold=True,color="FFFFFF")
+        cell.alignment=Alignment(vertical="center",wrap_text=True)
+    sh.row_dimensions[1].height=32
+    for j,width in enumerate(widths or [21]*len(headers),1):
+        sh.column_dimensions[get_column_letter(j)].width=min(width,75)
+    for row in sh.iter_rows(min_row=2):
+        for cell in row:
+            cell.font=Font(name="Aptos",size=10,color=INK.lstrip("#"))
+            cell.alignment=Alignment(vertical="center")
+            if row[0].row%2==0: cell.fill=PatternFill("solid",fgColor="F4F8F5")
+    sh.sheet_view.showGridLines=False
     return sh
-
-def excelcol(n):
-    out=""
-    while n:
-        n,r=divmod(n-1,26)
-        out=chr(65+r)+out
-    return out
 
 def main():
     source=chosen_output()
@@ -104,8 +99,9 @@ def main():
         fail("2026-2027 records missing analyst-approved variance designation.")
     if len(modern)!=variance: fail("Variance count mismatch.")
 
-    wb=Workbook.create()
-    overview=wb.worksheets.add("RELEASE SUMMARY")
+    wb=Workbook()
+    overview=wb.active
+    overview.title="RELEASE SUMMARY"
     rows=[
       ["LAMAR STATE COLLEGE ORANGE • PRODUCT 3",""],
       ["Unawarded-but-complete credential review",""],
@@ -124,14 +120,21 @@ def main():
       ["Release approval","PENDING REGISTRAR REVIEW"],
       ["Source timestamp",datetime.now().strftime("%Y-%m-%d %H:%M")],
     ]
-    overview.get_range("A1:B16").values=rows
-    overview.get_range("A1:B2").format={"fill":GREEN,"font":{"bold":True,"color":WHITE},"row_height":32}
-    overview.get_range("A3:A16").format={"font":{"bold":True,"color":INK},"fill":PALE,"row_height":26}
-    overview.get_range("B3:B16").format.row_height=26
-    overview.get_range("B13:B15").format={"fill":GOLD,"font":{"bold":True,"color":INK},"wrap_text":True,"row_height":30}
-    overview.get_range("A:A").format.column_width=53
-    overview.get_range("B:B").format.column_width=95
-    overview.freeze_panes.freeze_rows(2)
+    for row in rows: overview.append(row)
+    overview.column_dimensions["A"].width=55
+    overview.column_dimensions["B"].width=90
+    overview.freeze_panes="A3"
+    overview.sheet_view.showGridLines=False
+    for i in range(1,17):
+        overview.row_dimensions[i].height=28
+        ac=overview.cell(i,1);bc=overview.cell(i,2)
+        ac.font=Font(name="Aptos",bold=True,color=WHITE.lstrip("#") if i<=2 else INK.lstrip("#"))
+        ac.fill=PatternFill("solid",fgColor=GREEN.lstrip("#") if i<=2 else PALE.lstrip("#"))
+        bc.alignment=Alignment(wrap_text=True,vertical="center")
+        if i<=2: bc.fill=PatternFill("solid",fgColor=GREEN.lstrip("#"))
+        if 13<=i<=15:
+            bc.fill=PatternFill("solid",fgColor=GOLD.lstrip("#"))
+            bc.font=Font(name="Aptos",bold=True,color=INK.lstrip("#"))
 
     roster_headers=["Student ID","Catalog","Credential ID","Credential / Title",
        "Canonical Lineage","Award Category","Academic Status","Catalog Status",
@@ -149,9 +152,11 @@ def main():
     roster.sort(key=lambda x:(x[0],x[1],x[4]))
     sheet=add_sheet(wb,"AWARD ROSTER",roster_headers,roster,[18,16,36,40,40,18,38,20,18,30,43,20,42,22,20])
     if roster:
-        try:
-            sheet.get_range(f"L2:L{len(roster)+1}").data_validation={"rule":{"type":"list","values":["PENDING","APPROVE","HOLD","REJECT","FOLLOW UP"]}}
-        except Exception as exc:print("Decision validation not available:",exc)
+        dv=DataValidation(type="list",formula1='"PENDING,APPROVE,HOLD,REJECT,FOLLOW UP"',allow_blank=False)
+        dv.error="Select a listed review disposition."
+        dv.showErrorMessage=True
+        sheet.add_data_validation(dv)
+        dv.add(f"L2:L{len(roster)+1}")
     exp_headers=["Student ID","Catalog","Credential ID","Canonical Lineage","Award Category",
                  "Temporal Status","Catalog Deadline","Disposition","Reviewer Notes"]
     exp_data=[[val(x,"student_id"),val(x,"catalog_year"),val(x,"credential_id"),
@@ -181,7 +186,11 @@ def main():
     ],[38,75,34])
 
     output=source/"RESTRICTED_LSCO_Product3_Registrar_Review_20261008.xlsx"
-    SpreadsheetFile.export_xlsx(wb).save(str(output))
+    wb.save(output)
+    check=load_workbook(output,read_only=True,data_only=True)
+    if check["AWARD ROSTER"].max_row != len(awards)+1:
+        fail("Export verification failed: award roster row count mismatch.")
+    check.close()
     if not output.is_file() or output.stat().st_size<5000:
         fail("Workbook export did not produce a valid-size file.")
     print("PRODUCT 3 REGISTRAR REVIEW WORKBOOK CREATED")
