@@ -34,9 +34,9 @@ def load_catalog_policy() -> dict[str, dict[str, str]]:
             if not expiry or not record["source_document"].strip() or not record["source_location"].strip():
                 raise RuntimeError(f"Verified catalog lacks source or expiration: {year}")
             date.fromisoformat(expiry)
-        elif status == "REVIEW_SOURCE_REQUIRED":
+        elif status in {"REVIEW_SOURCE_REQUIRED", "ANALYST_APPROVED_VARIANCE"}:
             if expiry:
-                raise RuntimeError(f"Unverified catalog must not specify a made-up deadline: {year}")
+                raise RuntimeError(f"Catalog without source-verified expiration must not specify a deadline: {year}")
         else:
             raise RuntimeError(f"Unrecognized catalog policy status for {year}: {status}")
         by_year[year] = record
@@ -51,6 +51,15 @@ CATALOG_POLICY = load_catalog_policy()
 def catalog_temporal_fields(catalog_year: object) -> dict[str, str]:
     value = str(catalog_year).strip()
     record = CATALOG_POLICY.get(value)
+    if record is not None and record["source_status"] == "ANALYST_APPROVED_VARIANCE":
+        # A dated analyst authorization allows this current-year catalog into
+        # the analytical product. It is NOT evidence for a graduation deadline
+        # and does not constitute independent authorization to confer.
+        if value != "2026-2027" or EVALUATION_DATE != date(2026, 10, 8):
+            raise RuntimeError("Catalog variance is scoped only to 2026-2027 as of 2026-10-08")
+        return dict(catalog_expiration_date="", catalog_temporal_status="CATALOG_CURRENT",
+                    catalog_policy_evidence="ANALYST_APPROVED_VARIANCE:2026-10-08;SOURCE_CONFIRMATION_PENDING",
+                    conferral_temporal_eligibility="PASS_ANALYST_APPROVED_VARIANCE")
     if record is None or record["source_status"] != "VERIFIED":
         return dict(catalog_expiration_date="", catalog_temporal_status="CATALOG_DATE_REVIEW",
                     catalog_policy_evidence=("UNMAPPED_CATALOG_YEAR" if record is None
