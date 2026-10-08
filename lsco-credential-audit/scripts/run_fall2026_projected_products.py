@@ -28,7 +28,7 @@ import run_fall_2026_incremental_audit as base
 import profile_refresh_delta as refresh
 from catalog_temporal_policy import catalog_temporal_fields, EVALUATION_DATE
 
-OUT=ROOT/"data/processed/reporting/fall2026_projected_products_v2"
+OUT=ROOT/"data/processed/reporting/fall2026_projected_products_v3"
 COLUMNS=["Banner ID","Last Name","First Name","Declared Major","Catalog Year",
  "Credential ID","Whole Classes Remaining","Missing Requirement 1","Allowed Courses 1",
  "Missing Requirement 2","Allowed Courses 2","Missing Requirement 3","Allowed Courses 3",
@@ -47,7 +47,12 @@ def resolve_missing(row, requirements, support, occupied):
         return None,"MISSING_REQUIREMENT_DEFINITION"
     types=set(group.option_type.astype(str).str.upper().str.strip())
     if "ELECTIVE" in types:
-        return None,"ELECTIVE_WHOLE_CLASS_SOLVER_REQUIRED"
+        # The catalog rule is a legitimate advisement description.
+        # SCH do not tell us how many whole classes remain: preserve
+        # the text separately; never invent a 1-class obligation.
+        description="; ".join(sorted(set(group.option_value.astype(str).str.strip())))
+        hours=str(group.iloc[0].get("credit_hours","")).strip()
+        return None,"ELECTIVE_CLASS_COUNT_UNKNOWN: "+description+" ("+hours+" SCH)"
     alternatives=support["compound_alternatives"].get(rid,[])
     if alternatives:
         viable=[]
@@ -60,9 +65,16 @@ def resolve_missing(row, requirements, support, occupied):
         best=sorted(tuple(x) for x in viable if len(x)==fewest)
         # Different minimal compound paths have different class combinations,
         # not equivalent one-class options. Hold ambiguity for review.
-        if len(set(best))!=1:return None,"COMPOUND_ALTERNATIVES_REQUIRE_REVIEW"
+        if len(set(best))!=1:
+            # The chosen minimum paths have the same whole-class count,
+            # but might differ by an entire multi-course alternative.
+            # Preserve the original catalog options rather than pretend
+            # courses across different paths are freely interchangeable.
+            label=" OR ".join(" + ".join(path) for path in sorted(set(best)))
+            return [(rid,label)]*fewest,"OK"
         return [(rid,course) for course in best[0]],"OK"
     candidates=set()
+    literal_labels=set()
     for _,option in group.iterrows():
         kind=str(option.option_type).upper().strip()
         value=base.engine.normalize_course_code(option.option_value)
@@ -75,6 +87,7 @@ def resolve_missing(row, requirements, support, occupied):
             if key not in support["core_lookup"]:
                 return None,"CORE_BUCKET_LOOKUP_MISSING"
             candidates.update(support["core_lookup"][key])
+            literal_labels.add(str(option.option_value).strip())
         else:
             return None,"UNSUPPORTED_OPTION_TYPE_"+kind
     candidates={x for x in candidates if x and x not in occupied}
@@ -87,7 +100,9 @@ def resolve_missing(row, requirements, support, occupied):
         return None,"UNMET_BUT_NO_ADDITIONAL_COURSE_NEEDED_REVIEW"
     # Multiple obligations in one catalog requirement cannot be counted
     # as one merely because they share an ID.
-    return [(rid,"; ".join(sorted(candidates)))]*needed,"OK"
+    label=(" / ".join(sorted(literal_labels)) if literal_labels else
+           "; ".join(sorted(candidates)))
+    return [(rid,label)]*needed,"OK"
 
 def resolve_plan(detail, requirements, support):
     counted=chosen(detail.to_dict("records"))
