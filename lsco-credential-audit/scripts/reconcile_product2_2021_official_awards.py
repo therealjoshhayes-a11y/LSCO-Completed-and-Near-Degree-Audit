@@ -95,7 +95,7 @@ def classify(group: pd.DataFrame) -> pd.Series:
         "mapped_official_lineages": " | ".join(sorted(set(found["direct_official_lineage"]) - {""})),
     })
 
-summary = evidence.groupby(case_cols, dropna=False, sort=False).apply(classify, include_groups=False).reset_index()
+summary = evidence.groupby(case_cols, dropna=False, sort=False).apply(classify).reset_index()
 if len(summary) != 60:
     raise RuntimeError(f"Case reconciliation must have 60 rows, found {len(summary)}")
 summary.to_csv(CASES_OUT, index=False)
