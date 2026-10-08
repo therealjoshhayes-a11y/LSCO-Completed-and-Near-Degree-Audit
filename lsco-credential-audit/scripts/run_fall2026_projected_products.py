@@ -281,6 +281,35 @@ def main():
     print(f"Product 4 plans: {len(p4)} / students: {len({r['student'] for r in p4})}")
     print(f"Product 5 plans: {len(near)} / students: {len(best)}")
     print(f"Students held from nearest-plan ranking due to unresolved options: {len(held_students)}")
+    # Keep unresolved catalog language available to authorized reviewers.
+    # These records are deliberately NOT classified as 1/2/3 whole classes.
+    unresolved_rows=[]
+    for sid in students:
+        payload=json.loads((chunks/(sid.replace("/","_")+".json")).read_text(encoding="utf-8"))
+        if not payload["unresolved"]:continue
+        enroll=fall.loc[fall.student_id.eq(sid)]
+        if enroll.empty:continue
+        first=enroll.iloc[0]
+        for item in payload["unresolved"]:
+            unresolved_rows.append([
+                sid,str(first.get("last_name","")),str(first.get("first_name","")),
+                str(first.get("student_major","")),item["year"],item["credential"],
+                item["reason"],"NOT CLASS-COUNTED: source rule requires review"
+            ])
+    wb=Workbook();ws=wb.active;ws.title="CATALOG RULE REVIEW"
+    review_headers=["Banner ID","Last Name","First Name","Declared Major",
+                    "Catalog Year","Credential ID","Catalog Requirement / Reason","Treatment"]
+    ws.append(review_headers)
+    for row in unresolved_rows:ws.append(row)
+    ws.freeze_panes="A2"
+    ws.auto_filter.ref=f"A1:H{len(unresolved_rows)+1}"
+    for cell in ws[1]:
+        cell.fill=PatternFill("solid",fgColor="145A32")
+        cell.font=Font(bold=True,color="FFFFFF")
+    for n,width in enumerate([18,20,20,25,17,42,85,48],1):
+        ws.column_dimensions[get_column_letter(n)].width=width
+    wb.save(workbook_dir/"P5_Fall26_Rule_Review.xlsx")
+    print(f"Unresolved catalog-rule records retained: {len(unresolved_rows)}")
     print("Unresolved reasons:",dict(held_plans))
     print("Whole-class counts use min_required or compound lengths; elective SCH-to-course solver is NOT implemented.")
     print("Do not release Product 5 as complete while held students exist.")
