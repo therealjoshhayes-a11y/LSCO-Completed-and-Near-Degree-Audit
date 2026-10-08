@@ -110,3 +110,49 @@ print("Restricted case reconciliation:", CASES_OUT)
 print("Restricted all-award evidence:", EVIDENCE_OUT)
 print("FERPA-safe aggregate:", SUMMARY_OUT)
 print("No Product 2 selections, mappings, or awards were modified.")
+
+# Second-pass historical award adjudication: preserve one record per exact official
+# transaction, rather than collapsing program/degree/term into independent lists.
+detail_cols = case_cols + ["Curr1ProgramCode", "Major1Code", "DegreeCode",
+                           "award_term", "direct_official_lineage",
+                           "official_mapping_status", "official_suppression_family",
+                           "evidence_relation"]
+detail = evidence[detail_cols].copy()
+detail["award_term_numeric"] = pd.to_numeric(detail["award_term"], errors="coerce")
+# Banner YYYYTT terms: only their year can be derived safely without institution-
+# specific term-code semantics. Never infer a catalog year from a grad term.
+detail["award_calendar_year"] = detail["award_term"].str.extract(r"^(\\d{4})\\d{2}$")[0].fillna("")
+detail["award_timing_relative_to_catalog"] = "TERM_FORMAT_REVIEW"
+year = pd.to_numeric(detail["award_calendar_year"], errors="coerce")
+detail.loc[year.lt(2021), "award_timing_relative_to_catalog"] = "BEFORE_2021_CALENDAR_YEAR"
+detail.loc[year.eq(2021) | year.eq(2022), "award_timing_relative_to_catalog"] = "DURING_2021_OR_2022_CALENDAR_YEAR_REVIEW_TERM"
+detail.loc[year.gt(2022), "award_timing_relative_to_catalog"] = "AFTER_2022_CALENDAR_YEAR"
+detail.loc[detail["evidence_relation"].eq("NO_OFFICIAL_RECORD"), "award_timing_relative_to_catalog"] = "NO_OFFICIAL_AWARD"
+detail["identity_review_priority"] = "OTHER_AWARD_CODE_COMPARISON"
+detail.loc[detail["evidence_relation"].eq("SAME_CANONICAL_LINEAGE_VERIFY_CODES"), "identity_review_priority"] = "POTENTIAL_SAME_CREDENTIAL_CHECK_EXACT_BANNER_CODES"
+detail.loc[detail["direct_official_lineage"].eq("") & detail["evidence_relation"].ne("NO_OFFICIAL_RECORD"), "identity_review_priority"] = "UNMAPPED_OFFICIAL_CODE_TRIPLE_REVIEW"
+detail.loc[detail["evidence_relation"].eq("NO_OFFICIAL_RECORD"), "identity_review_priority"] = "NO_AWARD_ON_LEDGER"
+
+expanded_path = PRODUCT / "RESTRICTED_2021_2022_HISTORICAL_AWARD_CASE_EVIDENCE.csv"
+expanded_case_path = PRODUCT / "RESTRICTED_2021_2022_HISTORICAL_AWARD_CASE_REVIEW.csv"
+safe_path = PRODUCT / "FERPA_SAFE_2021_2022_HISTORICAL_AWARD_REVIEW_COUNTS.csv"
+detail.to_csv(expanded_path, index=False)
+cases_expanded = (detail.groupby(case_cols, dropna=False)
+    .agg(
+        award_transactions=("evidence_relation", lambda x: int(x.ne("NO_OFFICIAL_RECORD").sum())),
+        official_code_triples=("Curr1ProgramCode", lambda x: len(set(x) - {""})),
+        timing_categories=("award_timing_relative_to_catalog", lambda x: " | ".join(sorted(set(x)))),
+        identity_review_categories=("identity_review_priority", lambda x: " | ".join(sorted(set(x))))
+    ).reset_index())
+cases_expanded.to_csv(expanded_case_path, index=False)
+safe = detail.groupby(["candidate_award_category", "award_timing_relative_to_catalog",
+                      "identity_review_priority"], dropna=False).size().rename("official_evidence_rows").reset_index()
+safe.to_csv(safe_path, index=False)
+print("\\nHISTORICAL AWARD TIMING AND CODE-IDENTITY REVIEW")
+print(safe.to_string(index=False))
+print("Distinct 2021-22 recommendations:", len(cases_expanded))
+print("Restricted exact award transactions:", expanded_path)
+print("Restricted case-level adjudication:", expanded_case_path)
+print("FERPA-safe aggregate:", safe_path)
+print("Note: calendar years 2021/2022 overlap multiple term boundaries and require term-code review.")
+
